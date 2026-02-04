@@ -1,0 +1,28 @@
+{
+    "name": "claude-client",
+    "version": "0.1.0",
+    "description": "A standalone Node.js client for controlling Claude Code CLI",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "watch": "tsc -w",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+        "claude",
+        "ai",
+        "cli",
+        "client",
+        "sdk"
+    ],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "chalk": "^5.0.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.0.0",
+        "@types/node": "^20.0.0"
+    }
+}
