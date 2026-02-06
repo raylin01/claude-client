@@ -16,17 +16,21 @@ function debugLog(msg: string) {
 }
 
 import { 
-    CliMessage, 
     SystemMessage, 
-    StreamEventMessage, 
+    CliMessage, 
+    StreamEvent, 
+    ContentDelta, 
+    Usage, 
     AssistantMessage, 
-    UserMessage, 
-    ControlRequestMessage, 
-    ControlResponseMessage, 
-    ControlResponseData,
-    ContentDelta,
+    UserMessage,
+    ControlRequestMessage,
+    ControlResponseMessage,
+    InputMessage,
+    ResultMessage,
     Suggestion,
-    PermissionScope
+    PermissionScope,
+    StreamEventMessage,
+    ControlResponseData
 } from './types.js';
 
 export interface ClaudeClientConfig {
@@ -63,6 +67,18 @@ export interface ClaudeClientConfig {
     };
 }
 
+export interface ToolUseStartEvent {
+    id: string;
+    name: string;
+    input: Record<string, any>;
+}
+
+export interface ToolResultEvent {
+    toolUseId: string;
+    content: string;
+    isError: boolean;
+}
+
 export declare interface ClaudeClient {
     on(event: 'ready', listener: () => void): this;
     on(event: 'message', listener: (message: AssistantMessage) => void): this;
@@ -71,11 +87,33 @@ export declare interface ClaudeClient {
     on(event: 'thinking_delta', listener: (thinking: string) => void): this;
     on(event: 'text_accumulated', listener: (text: string) => void): this;
     on(event: 'thinking_accumulated', listener: (thinking: string) => void): this;
-    on(event: 'tool_use', listener: (tool: any) => void): this; // Generic tool use
+    on(event: 'tool_use', listener: (tool: any) => void): this;
+    on(event: 'tool_use_start', listener: (tool: ToolUseStartEvent) => void): this;
+    on(event: 'tool_result', listener: (result: ToolResultEvent) => void): this;
     on(event: 'control_request', listener: (request: ControlRequestMessage) => void): this;
     on(event: 'user_message', listener: (message: UserMessage) => void): this;
     on(event: 'error', listener: (error: Error) => void): this;
     on(event: 'exit', listener: (code: number | null) => void): this;
+    on(event: 'result', listener: (result: ResultMessage) => void): this;
+    on(event: 'usage_update', listener: (usage: Usage) => void): this;
+    on(event: 'status_change', listener: (status: SessionStatus, pendingAction: PendingAction | null) => void): this;
+}
+
+/**
+ * Session status
+ */
+export type SessionStatus = 'running' | 'input_needed' | 'idle' | 'error';
+
+/**
+ * Pending action requiring user input
+ */
+export interface PendingAction {
+    type: 'permission' | 'question';
+    requestId: string;
+    toolName?: string;
+    input?: Record<string, any>;
+    question?: string;
+    options?: string[];
 }
 
 export class ClaudeClient extends EventEmitter {
@@ -92,6 +130,17 @@ export class ClaudeClient extends EventEmitter {
     // Accumulated content for streaming mode
     private _accumulatedText = '';
     private _accumulatedThinking = '';
+    
+    // Tool input accumulation (input is streamed via input_json_delta)
+    private _currentToolBlock: { id: string; name: string; inputJson: string } | null = null;
+    
+    // Status tracking
+    private _status: SessionStatus = 'idle';
+    private _pendingAction: PendingAction | null = null;
+    
+    // Message queue for when Claude is busy
+    private _messageQueue: string[] = [];
+    private _isProcessingMessage = false;
 
     constructor(config: ClaudeClientConfig) {
         super();
@@ -103,6 +152,66 @@ export class ClaudeClient extends EventEmitter {
 
     get sessionId(): string | null {
         return this._sessionId;
+    }
+
+    /**
+     * Get current session status
+     */
+    getStatus(): SessionStatus {
+        return this._status;
+    }
+
+    /**
+     * Get pending action (if status is 'input_needed')
+     */
+    getPendingAction(): PendingAction | null {
+        return this._pendingAction;
+    }
+
+    /**
+     * Check if currently processing a message
+     */
+    isProcessing(): boolean {
+        return this._isProcessingMessage;
+    }
+
+    /**
+     * Queue a message to be sent when Claude is ready
+     * If not processing, sends immediately
+     */
+    queueMessage(text: string): void {
+        if (this._isProcessingMessage) {
+            this._messageQueue.push(text);
+            debugLog(`Message queued (queue size: ${this._messageQueue.length})`);
+        } else {
+            this.sendMessage(text);
+        }
+    }
+
+    /**
+     * Process next message in queue (called after result received)
+     */
+    private processNextQueuedMessage(): void {
+        if (this._messageQueue.length > 0) {
+            const nextMessage = this._messageQueue.shift()!;
+            debugLog(`Processing queued message (${this._messageQueue.length} remaining)`);
+            this.sendMessage(nextMessage);
+        }
+    }
+
+    /**
+     * Update status and emit event
+     */
+    private setStatus(status: SessionStatus, pendingAction: PendingAction | null = null): void {
+        const changed = this._status !== status || 
+            JSON.stringify(this._pendingAction) !== JSON.stringify(pendingAction);
+        
+        this._status = status;
+        this._pendingAction = pendingAction;
+        
+        if (changed) {
+            this.emit('status_change', status, pendingAction);
+        }
     }
 
     /**
@@ -210,10 +319,10 @@ export class ClaudeClient extends EventEmitter {
         });
     }
 
-    /**
-     * Send a user message to Claude
-     */
     async sendMessage(text: string): Promise<void> {
+        this._isProcessingMessage = true;
+        this.setStatus('running');
+        
         const message = {
             type: 'user',
             session_id: this._sessionId || this.config.sessionId || 'pending',
@@ -257,6 +366,18 @@ export class ClaudeClient extends EventEmitter {
     }
 
     /**
+     * Interrupt current operation (like Ctrl+C but via protocol)
+     */
+    async interrupt(): Promise<void> {
+        debugLog('Sending interrupt control request');
+        await this.writeToStdin({
+            type: 'control_request',
+            request_id: randomUUID(),
+            request: { subtype: 'interrupt' }
+        });
+    }
+
+    /**
      * Terminate the session
      */
     kill(): void {
@@ -264,6 +385,23 @@ export class ClaudeClient extends EventEmitter {
             this.process.kill();
             this.process = null;
         }
+    }
+
+    /**
+     * Send a message with multiple content blocks (text, images, etc.)
+     */
+    async sendMessageWithContent(content: Array<{ type: string; [key: string]: any }>): Promise<void> {
+        const message = {
+            type: 'user',
+            session_id: this._sessionId || this.config.sessionId || 'pending',
+            message: {
+                role: 'user',
+                content
+            },
+            parent_tool_use_id: null
+        };
+
+        await this.writeToStdin(message);
     }
 
     private async writeToStdin(data: any): Promise<void> {
@@ -329,15 +467,50 @@ export class ClaudeClient extends EventEmitter {
 
             case 'user':
                 this.emit('user_message', message);
+                // Emit tool_result events for each tool result in the message
+                this.handleToolResults(message);
                 break;
 
             case 'control_request':
                 debugLog(`Control request: id=${message.request_id} subtype=${message.request.subtype} tool=${(message.request as any).tool_name || 'n/a'}`);
+                
+                // Update status to input_needed with pending action details
+                const req = message.request;
+                if (req.subtype === 'can_use_tool') {
+                    const isQuestion = req.tool_name === 'AskUserQuestion';
+                    this.setStatus('input_needed', {
+                        type: isQuestion ? 'question' : 'permission',
+                        requestId: message.request_id,
+                        toolName: req.tool_name,
+                        input: req.input,
+                        question: isQuestion ? req.input?.question : undefined,
+                        options: isQuestion ? req.input?.options : undefined
+                    });
+                }
+                
                 this.emit('control_request', message);
+                break;
+
+            case 'result':
+                const resMessage = message as ResultMessage;
+                debugLog(`Result received: subtype=${resMessage.subtype} duration=${resMessage.duration_ms}ms`);
+                
+                // Update status and process queue
+                this._isProcessingMessage = false;
+                this.setStatus(resMessage.is_error ? 'error' : 'idle');
+                
+                this.emit('result', resMessage);
+                
+                // Process next queued message if any
+                this.processNextQueuedMessage();
                 break;
 
             case 'keep_alive':
                 // minimal handling
+                break;
+
+            default:
+                debugLog(`Unhandled message type: ${message.type} - ${JSON.stringify(message).slice(0, 200)}`);
                 break;
         }
     }
@@ -361,14 +534,61 @@ export class ClaudeClient extends EventEmitter {
                     this._accumulatedThinking += delta.thinking;
                     this.emit('thinking_delta', delta.thinking);  // Delta for backwards compat
                     this.emit('thinking_accumulated', this._accumulatedThinking);  // Full accumulated
+                } else if (delta.type === 'input_json_delta' && delta.partial_json) {
+                    // Accumulate tool input JSON
+                    if (this._currentToolBlock) {
+                        this._currentToolBlock.inputJson += delta.partial_json;
+                    }
                 }
                 break;
             
-            // Add specific handling for tool use start if needed
             case 'content_block_start':
                 if (event.content_block?.type === 'tool_use') {
-                    // emit generic tool use event ?
+                    // Start tracking tool block - input will be accumulated via deltas
+                    this._currentToolBlock = {
+                        id: event.content_block.id,
+                        name: event.content_block.name,
+                        inputJson: ''
+                    };
                 }
+                break;
+
+            case 'content_block_stop':
+                // Tool execution completed - emit with accumulated input
+                if (this._currentToolBlock) {
+                    let parsedInput = {};
+                    try {
+                        if (this._currentToolBlock.inputJson) {
+                            parsedInput = JSON.parse(this._currentToolBlock.inputJson);
+                        }
+                    } catch (e) {
+                        debugLog(`Failed to parse tool input JSON: ${this._currentToolBlock.inputJson}`);
+                    }
+                    
+                    this.emit('tool_use_start', {
+                        id: this._currentToolBlock.id,
+                        name: this._currentToolBlock.name,
+                        input: parsedInput
+                    });
+                    this._currentToolBlock = null;
+                }
+                break;
+
+                break;
+
+            case 'message_delta':
+                // Contains usage stats
+                if (event.usage) {
+                    this.emit('usage_update', event.usage);
+                }
+                break;
+
+            case 'message_stop':
+                // Message completed
+                break;
+
+            default:
+                debugLog(`Unhandled stream event type: ${event.type} - ${JSON.stringify(event).slice(0, 200)}`);
                 break;
         }
     }
@@ -391,5 +611,22 @@ export class ClaudeClient extends EventEmitter {
 
         // Default for enabled thinking
         return 31999;
+    }
+
+    /**
+     * Parse tool results from user messages and emit events
+     */
+    private handleToolResults(message: UserMessage): void {
+        const content = message.message?.content || message.content || [];
+        
+        for (const block of content) {
+            if (block.type === 'tool_result') {
+                this.emit('tool_result', {
+                    toolUseId: block.tool_use_id,
+                    content: block.content || '',
+                    isError: block.is_error === true
+                });
+            }
+        }
     }
 }

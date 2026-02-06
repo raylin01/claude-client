@@ -5,14 +5,7 @@
 /**
  * Message types sent from CLI to extension (stdout)
  */
-export type CliMessage =
-    | SystemMessage
-    | StreamEventMessage
-    | AssistantMessage
-    | UserMessage
-    | ControlRequestMessage
-    | ControlResponseMessage
-    | KeepAliveMessage;
+
 
 /**
  * System initialization message
@@ -187,3 +180,23 @@ export interface ProtocolError {
         message: string;
     };
 }
+export interface ResultMessage {
+    type: 'result';
+    subtype: 'success' | 'error';
+    is_error: boolean;
+    duration_ms: number;
+    duration_api_ms: number;
+    num_turns: number;
+    result: string;
+    error?: string;
+}
+
+export type CliMessage =
+    | SystemMessage
+    | StreamEventMessage
+    | AssistantMessage
+    | UserMessage
+    | ControlRequestMessage
+    | ControlResponseMessage
+    | KeepAliveMessage
+    | ResultMessage;
