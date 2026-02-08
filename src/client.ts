@@ -64,6 +64,14 @@ export interface ClaudeClientConfig {
      */
     args?: string[];
     /**
+     * Include partial messages (passes --include-partial-messages)
+     */
+    includePartialMessages?: boolean;
+    /**
+     * Use permission prompt tool over stdio (passes --permission-prompt-tool stdio)
+     */
+    permissionPromptTool?: boolean;
+    /**
      * Optional session ID to use before system/init arrives
      */
     sessionId?: string;
@@ -87,6 +95,22 @@ export interface ClaudeClientConfig {
      * Disable session persistence (passes --no-session-persistence)
      */
     persistSession?: boolean;
+    /**
+     * Max turns for the session (passes --max-turns)
+     */
+    maxTurns?: number;
+    /**
+     * Initial model (passes --model)
+     */
+    model?: string;
+    /**
+     * Agent name (passes --agent)
+     */
+    agent?: string;
+    /**
+     * Enable SDK file checkpointing hooks (sets CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING)
+     */
+    enableFileCheckpointing?: boolean;
     /**
      * Thinking configuration
      */
@@ -279,10 +303,18 @@ export class ClaudeClient extends EventEmitter {
                     '--output-format', 'stream-json',
                     '--verbose',
                     '--input-format', 'stream-json',
-                    '--include-partial-messages',
-                    '--permission-prompt-tool', 'stdio',
                     ...(this.config.args || [])
                 ];
+
+                const includePartial = this.config.includePartialMessages !== false;
+                if (includePartial) {
+                    args.push('--include-partial-messages');
+                }
+
+                const permissionPrompt = this.config.permissionPromptTool !== false;
+                if (permissionPrompt) {
+                    args.push('--permission-prompt-tool', 'stdio');
+                }
 
                 // Add max-thinking-tokens if enabled
                 const maxTokens = this.getMaxThinkingTokens();
@@ -298,6 +330,15 @@ export class ClaudeClient extends EventEmitter {
                 }
                 if (this.config.resumeSessionId) {
                     args.push('--resume', this.config.resumeSessionId);
+                }
+                if (this.config.maxTurns && this.config.maxTurns > 0) {
+                    args.push('--max-turns', this.config.maxTurns.toString());
+                }
+                if (this.config.model) {
+                    args.push('--model', this.config.model);
+                }
+                if (this.config.agent) {
+                    args.push('--agent', this.config.agent);
                 }
                 if (this.config.forkSession) {
                     args.push('--fork-session');
@@ -322,6 +363,7 @@ export class ClaudeClient extends EventEmitter {
                         // Ensure we don't prompt for auth if possible
                         // But use the entrypoint from legacy code which seems critical
                         CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
+                        ...(this.config.enableFileCheckpointing ? { CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: 'true' } : {}),
                         CI: 'true', 
                     },
                     stdio: ['pipe', 'pipe', 'pipe'],
