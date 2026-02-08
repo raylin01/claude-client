@@ -35,7 +35,8 @@ import {
     SystemMessage,
     McpMessageRequest,
     McpMessageEvent,
-    HookCallbackEvent
+    HookCallbackEvent,
+    ControlResponseEnvelope
 } from './types.js';
 
 export interface ClaudeClientConfig {
@@ -100,6 +101,7 @@ export declare interface ClaudeClient {
     on(event: 'tool_result', listener: (result: ToolResultEvent) => void): this;
     on(event: 'control_request', listener: (request: ControlRequestMessage) => void): this;
     on(event: 'control_cancel_request', listener: (request: ControlCancelRequestMessage) => void): this;
+    on(event: 'control_response', listener: (response: ControlResponseEnvelope) => void): this;
     on(event: 'user_message', listener: (message: UserMessage) => void): this;
     on(event: 'error', listener: (error: Error) => void): this;
     on(event: 'exit', listener: (code: number | null) => void): this;
@@ -147,6 +149,11 @@ export class ClaudeClient extends EventEmitter {
     private _status: SessionStatus = 'idle';
     private _pendingAction: PendingAction | null = null;
     private pendingControlRequests = new Map<string, ControlRequestMessage>();
+    private pendingControlResponses = new Map<string, {
+        resolve: (value: any) => void;
+        reject: (error: Error) => void;
+        timeout: NodeJS.Timeout;
+    }>();
     private readonly mcpResponseTimeoutMs = parseInt(process.env.CLAUDE_CLIENT_MCP_TIMEOUT_MS || '2000');
     
     // Message queue for when Claude is busy
@@ -381,44 +388,28 @@ export class ClaudeClient extends EventEmitter {
      */
     async interrupt(): Promise<void> {
         debugLog('Sending interrupt control request');
-        await this.writeToStdin({
-            type: 'control_request',
-            request_id: randomUUID(),
-            request: { subtype: 'interrupt' }
-        });
+        await this.sendControlRequest({ subtype: 'interrupt' });
     }
 
     /**
      * Set permission mode (default or acceptEdits)
      */
     async setPermissionMode(mode: 'default' | 'acceptEdits'): Promise<void> {
-        await this.writeToStdin({
-            type: 'control_request',
-            request_id: randomUUID(),
-            request: { subtype: 'set_permission_mode', mode }
-        });
+        await this.sendControlRequest({ subtype: 'set_permission_mode', mode });
     }
 
     /**
      * Set model for the session
      */
     async setModel(model: string): Promise<void> {
-        await this.writeToStdin({
-            type: 'control_request',
-            request_id: randomUUID(),
-            request: { subtype: 'set_model', model }
-        });
+        await this.sendControlRequest({ subtype: 'set_model', model });
     }
 
     /**
      * Set max thinking tokens for the session
      */
     async setMaxThinkingTokens(maxTokens: number): Promise<void> {
-        await this.writeToStdin({
-            type: 'control_request',
-            request_id: randomUUID(),
-            request: { subtype: 'set_max_thinking_tokens', max_thinking_tokens: maxTokens }
-        });
+        await this.sendControlRequest({ subtype: 'set_max_thinking_tokens', max_thinking_tokens: maxTokens });
     }
 
     /**
@@ -430,11 +421,7 @@ export class ClaudeClient extends EventEmitter {
             server_name: serverName,
             message
         };
-        await this.writeToStdin({
-            type: 'control_request',
-            request_id: randomUUID(),
-            request
-        });
+        await this.sendControlRequest(request);
     }
 
     /**
@@ -451,6 +438,30 @@ export class ClaudeClient extends EventEmitter {
                 }
             }
         });
+    }
+
+    /**
+     * Send a control_request and optionally wait for a control_response.
+     */
+    async sendControlRequest(request: any, timeoutMs: number = 5000): Promise<any> {
+        const requestId = randomUUID();
+
+        const promise = new Promise<any>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                this.pendingControlResponses.delete(requestId);
+                reject(new Error(`control_response timeout for ${requestId}`));
+            }, timeoutMs);
+
+            this.pendingControlResponses.set(requestId, { resolve, reject, timeout });
+        });
+
+        await this.writeToStdin({
+            type: 'control_request',
+            request_id: requestId,
+            request
+        });
+
+        return promise;
     }
 
     /**
@@ -635,6 +646,19 @@ export class ClaudeClient extends EventEmitter {
                             requestId: message.request_id,
                             respond
                         });
+                    }
+                }
+                break;
+
+            case 'control_response':
+                this.emit('control_response', message as ControlResponseEnvelope);
+                if ((message as any).response?.request_id) {
+                    const response = message as ControlResponseEnvelope;
+                    const pending = this.pendingControlResponses.get(response.response.request_id);
+                    if (pending) {
+                        clearTimeout(pending.timeout);
+                        this.pendingControlResponses.delete(response.response.request_id);
+                        pending.resolve(response.response);
                     }
                 }
                 break;

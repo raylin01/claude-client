@@ -181,6 +181,18 @@ export interface ControlResponseMessage {
     pending_permission_requests?: ControlRequest[];
 }
 
+// Control response envelope received from CLI (stdout)
+export interface ControlResponseEnvelope {
+    type: 'control_response';
+    response: {
+        subtype: 'success' | 'error';
+        request_id: string;
+        response?: ControlResponseData;
+        error?: string;
+        pending_permission_requests?: ControlRequest[];
+    };
+}
+
 export interface ControlResponseData {
     behavior: 'allow' | 'deny';
     message?: string;
@@ -261,6 +273,7 @@ export type CliMessage =
     | UserMessage
     | ControlRequestMessage
     | ControlResponseMessage
+    | ControlResponseEnvelope
     | ControlCancelRequestMessage
     | KeepAliveMessage
     | ResultMessage;
