@@ -68,6 +68,26 @@ export interface ClaudeClientConfig {
      */
     sessionId?: string;
     /**
+     * Resume an existing session ID (passes --resume)
+     */
+    resumeSessionId?: string;
+    /**
+     * Continue last conversation (passes --continue)
+     */
+    continueConversation?: boolean;
+    /**
+     * Fork session on resume (passes --fork-session)
+     */
+    forkSession?: boolean;
+    /**
+     * Resume at a specific message UUID (passes --resume-session-at)
+     */
+    resumeSessionAt?: string;
+    /**
+     * Disable session persistence (passes --no-session-persistence)
+     */
+    persistSession?: boolean;
+    /**
      * Thinking configuration
      */
     thinking?: {
@@ -271,6 +291,22 @@ export class ClaudeClient extends EventEmitter {
                     if (this.config.debug) {
                         console.log(`Extended thinking enabled: ${maxTokens} tokens`);
                     }
+                }
+
+                if (this.config.continueConversation) {
+                    args.push('--continue');
+                }
+                if (this.config.resumeSessionId) {
+                    args.push('--resume', this.config.resumeSessionId);
+                }
+                if (this.config.forkSession) {
+                    args.push('--fork-session');
+                }
+                if (this.config.resumeSessionAt) {
+                    args.push('--resume-session-at', this.config.resumeSessionAt);
+                }
+                if (this.config.persistSession === false) {
+                    args.push('--no-session-persistence');
                 }
 
                 if (this.config.debug) {
