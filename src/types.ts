@@ -109,8 +109,17 @@ export interface ControlRequestMessage {
     request: ControlRequest;
 }
 
-export interface ControlRequest {
-    subtype: 'can_use_tool' | 'hook_callback' | 'mcp_message';
+export type ControlRequest =
+    | CanUseToolRequest
+    | HookCallbackRequest
+    | McpMessageRequest
+    | SetPermissionModeRequest
+    | SetModelRequest
+    | SetMaxThinkingTokensRequest
+    | InterruptRequest;
+
+export interface CanUseToolRequest {
+    subtype: 'can_use_tool';
     tool_name?: string;
     input?: Record<string, any>;
     permission_suggestions?: Suggestion[];
@@ -118,7 +127,38 @@ export interface ControlRequest {
     decision_reason?: string;
     tool_use_id?: string;
     agent_id?: string;
+}
+
+export interface HookCallbackRequest {
+    subtype: 'hook_callback';
     callback_id?: string;
+    input?: Record<string, any>;
+    tool_use_id?: string;
+}
+
+export interface McpMessageRequest {
+    subtype: 'mcp_message';
+    server_name: string;
+    message: any;
+}
+
+export interface SetPermissionModeRequest {
+    subtype: 'set_permission_mode';
+    mode: 'default' | 'acceptEdits';
+}
+
+export interface SetModelRequest {
+    subtype: 'set_model';
+    model: string;
+}
+
+export interface SetMaxThinkingTokensRequest {
+    subtype: 'set_max_thinking_tokens';
+    max_thinking_tokens: number;
+}
+
+export interface InterruptRequest {
+    subtype: 'interrupt';
 }
 
 export interface Suggestion {
@@ -158,10 +198,18 @@ export interface KeepAliveMessage {
 }
 
 /**
+ * Control cancel request (cancel pending control request)
+ */
+export interface ControlCancelRequestMessage {
+    type: 'control_cancel_request';
+    request_id: string;
+}
+
+/**
  * Message types sent from extension to CLI (stdin)
  */
 export interface InputMessage {
-    type: 'user' | 'control_response' | 'interrupt';
+    type: 'user' | 'control_response' | 'control_request' | 'interrupt';
 }
 
 export interface UserInputMessage {
@@ -198,5 +246,6 @@ export type CliMessage =
     | UserMessage
     | ControlRequestMessage
     | ControlResponseMessage
+    | ControlCancelRequestMessage
     | KeepAliveMessage
     | ResultMessage;

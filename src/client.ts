@@ -30,7 +30,10 @@ import {
     Suggestion,
     PermissionScope,
     StreamEventMessage,
-    ControlResponseData
+    ControlResponseData,
+    ControlCancelRequestMessage,
+    SystemMessage,
+    McpMessageRequest
 } from './types.js';
 
 export interface ClaudeClientConfig {
@@ -81,6 +84,7 @@ export interface ToolResultEvent {
 
 export declare interface ClaudeClient {
     on(event: 'ready', listener: () => void): this;
+    on(event: 'system', listener: (message: SystemMessage) => void): this;
     on(event: 'message', listener: (message: AssistantMessage) => void): this;
     on(event: 'stream_event', listener: (event: StreamEventMessage) => void): this;
     on(event: 'text_delta', listener: (text: string) => void): this;
@@ -91,6 +95,7 @@ export declare interface ClaudeClient {
     on(event: 'tool_use_start', listener: (tool: ToolUseStartEvent) => void): this;
     on(event: 'tool_result', listener: (result: ToolResultEvent) => void): this;
     on(event: 'control_request', listener: (request: ControlRequestMessage) => void): this;
+    on(event: 'control_cancel_request', listener: (request: ControlCancelRequestMessage) => void): this;
     on(event: 'user_message', listener: (message: UserMessage) => void): this;
     on(event: 'error', listener: (error: Error) => void): this;
     on(event: 'exit', listener: (code: number | null) => void): this;
@@ -137,6 +142,7 @@ export class ClaudeClient extends EventEmitter {
     // Status tracking
     private _status: SessionStatus = 'idle';
     private _pendingAction: PendingAction | null = null;
+    private pendingControlRequests = new Map<string, ControlRequestMessage>();
     
     // Message queue for when Claude is busy
     private _messageQueue: string[] = [];
@@ -378,6 +384,55 @@ export class ClaudeClient extends EventEmitter {
     }
 
     /**
+     * Set permission mode (default or acceptEdits)
+     */
+    async setPermissionMode(mode: 'default' | 'acceptEdits'): Promise<void> {
+        await this.writeToStdin({
+            type: 'control_request',
+            request_id: randomUUID(),
+            request: { subtype: 'set_permission_mode', mode }
+        });
+    }
+
+    /**
+     * Set model for the session
+     */
+    async setModel(model: string): Promise<void> {
+        await this.writeToStdin({
+            type: 'control_request',
+            request_id: randomUUID(),
+            request: { subtype: 'set_model', model }
+        });
+    }
+
+    /**
+     * Set max thinking tokens for the session
+     */
+    async setMaxThinkingTokens(maxTokens: number): Promise<void> {
+        await this.writeToStdin({
+            type: 'control_request',
+            request_id: randomUUID(),
+            request: { subtype: 'set_max_thinking_tokens', max_thinking_tokens: maxTokens }
+        });
+    }
+
+    /**
+     * Send an MCP server message to the CLI
+     */
+    async sendMcpMessage(serverName: string, message: any): Promise<void> {
+        const request: McpMessageRequest = {
+            subtype: 'mcp_message',
+            server_name: serverName,
+            message
+        };
+        await this.writeToStdin({
+            type: 'control_request',
+            request_id: randomUUID(),
+            request
+        });
+    }
+
+    /**
      * Terminate the session
      */
     kill(): void {
@@ -453,6 +508,7 @@ export class ClaudeClient extends EventEmitter {
                         this.readyEmitted = true;
                         this.emit('ready');
                     }
+                    this.emit('system', message);
                 }
                 break;
             
@@ -473,6 +529,7 @@ export class ClaudeClient extends EventEmitter {
 
             case 'control_request':
                 debugLog(`Control request: id=${message.request_id} subtype=${message.request.subtype} tool=${(message.request as any).tool_name || 'n/a'}`);
+                this.pendingControlRequests.set(message.request_id, message);
                 
                 // Update status to input_needed with pending action details
                 const req = message.request;
@@ -489,6 +546,14 @@ export class ClaudeClient extends EventEmitter {
                 }
                 
                 this.emit('control_request', message);
+                break;
+
+            case 'control_cancel_request':
+                this.pendingControlRequests.delete(message.request_id);
+                if (this._pendingAction && this._pendingAction.requestId === message.request_id) {
+                    this.setStatus('idle', null);
+                }
+                this.emit('control_cancel_request', message);
                 break;
 
             case 'result':
