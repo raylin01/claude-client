@@ -52,6 +52,14 @@ export interface ClaudeClientConfig {
      */
     claudePath?: string;
     /**
+     * Executable to use when claudePath points to a script (default: node)
+     */
+    executable?: string;
+    /**
+     * Extra args for the executable when claudePath points to a script
+     */
+    executableArgs?: string[];
+    /**
      * Environment variables to pass to the CLI
      */
     env?: NodeJS.ProcessEnv;
@@ -366,7 +374,7 @@ export class ClaudeClient extends EventEmitter {
     async start(): Promise<void> {
         return new Promise((resolve, reject) => {
             try {
-                const claudeBin = this.config.claudePath || 'claude';
+                const claudePath = this.config.claudePath || 'claude';
                 const args = [
                     '--output-format', 'stream-json',
                     '--verbose',
@@ -508,12 +516,18 @@ export class ClaudeClient extends EventEmitter {
                     args.push('--no-session-persistence');
                 }
 
-                if (this.config.debug) {
-                    console.log(`Spawning: ${claudeBin} ${args.join(' ')}`);
-                }
-                debugLog(`Spawning: ${claudeBin} ${args.join(' ')}`);
+                const isScript = /\.(js|mjs|cjs|ts|tsx|jsx)$/.test(claudePath);
+                const spawnBin = isScript ? (this.config.executable || 'node') : claudePath;
+                const spawnArgs = isScript
+                    ? [...(this.config.executableArgs || []), claudePath, ...args]
+                    : args;
 
-                this.process = spawn(claudeBin, args, {
+                if (this.config.debug) {
+                    console.log(`Spawning: ${spawnBin} ${spawnArgs.join(' ')}`);
+                }
+                debugLog(`Spawning: ${spawnBin} ${spawnArgs.join(' ')}`);
+
+                this.process = spawn(spawnBin, spawnArgs, {
                     cwd: this.config.cwd,
                     env: {
                         ...process.env,
