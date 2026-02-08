@@ -212,6 +212,14 @@ export interface McpMessageEvent {
     respond: (mcpResponse: any) => Promise<void>;
 }
 
+export interface HookCallbackEvent {
+    callbackId?: string;
+    input?: Record<string, any>;
+    toolUseId?: string;
+    requestId: string;
+    respond: (responseData: ControlResponseData) => Promise<void>;
+}
+
 /**
  * Message types sent from extension to CLI (stdin)
  */

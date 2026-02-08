@@ -34,7 +34,8 @@ import {
     ControlCancelRequestMessage,
     SystemMessage,
     McpMessageRequest,
-    McpMessageEvent
+    McpMessageEvent,
+    HookCallbackEvent
 } from './types.js';
 
 export interface ClaudeClientConfig {
@@ -87,6 +88,7 @@ export declare interface ClaudeClient {
     on(event: 'ready', listener: () => void): this;
     on(event: 'system', listener: (message: SystemMessage) => void): this;
     on(event: 'mcp_message', listener: (event: McpMessageEvent) => void): this;
+    on(event: 'hook_callback', listener: (event: HookCallbackEvent) => void): this;
     on(event: 'message', listener: (message: AssistantMessage) => void): this;
     on(event: 'stream_event', listener: (event: StreamEventMessage) => void): this;
     on(event: 'text_delta', listener: (text: string) => void): this;
@@ -608,6 +610,31 @@ export class ClaudeClient extends EventEmitter {
 
                         // Best-effort cleanup of timeout if response is sent quickly
                         // Fallback timeout will auto-respond if no handler replies.
+                    }
+                }
+
+                if (req.subtype === 'hook_callback') {
+                    let responded = false;
+                    const respond = async (responseData: ControlResponseData) => {
+                        if (responded) return;
+                        responded = true;
+                        await this.sendControlResponse(message.request_id, responseData);
+                    };
+
+                    if (this.listenerCount('hook_callback') === 0) {
+                        void respond({
+                            behavior: 'allow',
+                            updatedInput: req.input || {},
+                            message: 'OK'
+                        });
+                    } else {
+                        this.emit('hook_callback', {
+                            callbackId: (req as any).callback_id,
+                            input: req.input,
+                            toolUseId: (req as any).tool_use_id,
+                            requestId: message.request_id,
+                            respond
+                        });
                     }
                 }
                 break;
