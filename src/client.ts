@@ -33,7 +33,8 @@ import {
     ControlResponseData,
     ControlCancelRequestMessage,
     SystemMessage,
-    McpMessageRequest
+    McpMessageRequest,
+    McpMessageEvent
 } from './types.js';
 
 export interface ClaudeClientConfig {
@@ -85,6 +86,7 @@ export interface ToolResultEvent {
 export declare interface ClaudeClient {
     on(event: 'ready', listener: () => void): this;
     on(event: 'system', listener: (message: SystemMessage) => void): this;
+    on(event: 'mcp_message', listener: (event: McpMessageEvent) => void): this;
     on(event: 'message', listener: (message: AssistantMessage) => void): this;
     on(event: 'stream_event', listener: (event: StreamEventMessage) => void): this;
     on(event: 'text_delta', listener: (text: string) => void): this;
@@ -143,6 +145,7 @@ export class ClaudeClient extends EventEmitter {
     private _status: SessionStatus = 'idle';
     private _pendingAction: PendingAction | null = null;
     private pendingControlRequests = new Map<string, ControlRequestMessage>();
+    private readonly mcpResponseTimeoutMs = parseInt(process.env.CLAUDE_CLIENT_MCP_TIMEOUT_MS || '2000');
     
     // Message queue for when Claude is busy
     private _messageQueue: string[] = [];
@@ -433,6 +436,22 @@ export class ClaudeClient extends EventEmitter {
     }
 
     /**
+     * Send an MCP response back to the CLI for a control_request.
+     */
+    async sendMcpControlResponse(requestId: string, mcpResponse: any): Promise<void> {
+        await this.writeToStdin({
+            type: 'control_response',
+            response: {
+                subtype: 'success',
+                request_id: requestId,
+                response: {
+                    mcp_response: mcpResponse
+                }
+            }
+        });
+    }
+
+    /**
      * Terminate the session
      */
     kill(): void {
@@ -546,6 +565,51 @@ export class ClaudeClient extends EventEmitter {
                 }
                 
                 this.emit('control_request', message);
+
+                if (req.subtype === 'mcp_message') {
+                    const serverName = (req as any).server_name;
+                    const msg = (req as any).message;
+                    let responded = false;
+                    let timeout: NodeJS.Timeout | null = null;
+                    const respond = async (mcpResponse: any) => {
+                        if (responded) return;
+                        responded = true;
+                        if (timeout) {
+                            clearTimeout(timeout);
+                            timeout = null;
+                        }
+                        await this.sendMcpControlResponse(message.request_id, mcpResponse);
+                    };
+
+                    if (this.listenerCount('mcp_message') === 0) {
+                        const defaultResponse = {
+                            jsonrpc: '2.0',
+                            result: {},
+                            id: msg && typeof msg.id !== 'undefined' ? msg.id : 0
+                        };
+                        void respond(defaultResponse);
+                    } else {
+                        timeout = setTimeout(() => {
+                            if (responded) return;
+                            const defaultResponse = {
+                                jsonrpc: '2.0',
+                                result: {},
+                                id: msg && typeof msg.id !== 'undefined' ? msg.id : 0
+                            };
+                            void respond(defaultResponse);
+                        }, this.mcpResponseTimeoutMs);
+
+                        this.emit('mcp_message', {
+                            serverName,
+                            message: msg,
+                            requestId: message.request_id,
+                            respond
+                        });
+
+                        // Best-effort cleanup of timeout if response is sent quickly
+                        // Fallback timeout will auto-respond if no handler replies.
+                    }
+                }
                 break;
 
             case 'control_cancel_request':

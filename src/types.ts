@@ -205,6 +205,13 @@ export interface ControlCancelRequestMessage {
     request_id: string;
 }
 
+export interface McpMessageEvent {
+    serverName: string;
+    message: any;
+    requestId: string;
+    respond: (mcpResponse: any) => Promise<void>;
+}
+
 /**
  * Message types sent from extension to CLI (stdin)
  */
