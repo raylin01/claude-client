@@ -72,6 +72,10 @@ export interface ClaudeClientConfig {
      */
     permissionPromptTool?: boolean;
     /**
+     * Custom permission prompt tool name (passes --permission-prompt-tool <name>)
+     */
+    permissionPromptToolName?: string;
+    /**
      * Optional session ID to use before system/init arrives
      */
     sessionId?: string;
@@ -100,13 +104,77 @@ export interface ClaudeClientConfig {
      */
     maxTurns?: number;
     /**
+     * Max budget in USD (passes --max-budget-usd)
+     */
+    maxBudgetUsd?: number;
+    /**
      * Initial model (passes --model)
      */
     model?: string;
     /**
+     * Fallback model (passes --fallback-model)
+     */
+    fallbackModel?: string;
+    /**
      * Agent name (passes --agent)
      */
     agent?: string;
+    /**
+     * Experimental betas (passes --betas)
+     */
+    betas?: string[];
+    /**
+     * JSON schema for input (passes --json-schema)
+     */
+    jsonSchema?: Record<string, any> | string;
+    /**
+     * Permission mode (passes --permission-mode)
+     */
+    permissionMode?: 'default' | 'acceptEdits';
+    /**
+     * Allow skipping permissions dangerously (passes --allow-dangerously-skip-permissions)
+     */
+    allowDangerouslySkipPermissions?: boolean;
+    /**
+     * Allowed tools list (passes --allowedTools)
+     */
+    allowedTools?: string[];
+    /**
+     * Disallowed tools list (passes --disallowedTools)
+     */
+    disallowedTools?: string[];
+    /**
+     * Tools list (passes --tools)
+     */
+    tools?: string[] | 'default';
+    /**
+     * MCP server config (passes --mcp-config)
+     */
+    mcpServers?: Record<string, any>;
+    /**
+     * Strict MCP config (passes --strict-mcp-config)
+     */
+    strictMcpConfig?: boolean;
+    /**
+     * Setting sources (passes --setting-sources)
+     */
+    settingSources?: string[];
+    /**
+     * Additional directories (passes --add-dir)
+     */
+    additionalDirectories?: string[];
+    /**
+     * Plugins to load (passes --plugin-dir)
+     */
+    plugins?: Array<{ type: 'local'; path: string }>;
+    /**
+     * Extra CLI args as key-value flags (passes --key value / --key when null)
+     */
+    extraArgs?: Record<string, any>;
+    /**
+     * Optional sandbox setting (merged into settings for extraArgs)
+     */
+    sandbox?: string;
     /**
      * Enable SDK file checkpointing hooks (sets CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING)
      */
@@ -311,9 +379,13 @@ export class ClaudeClient extends EventEmitter {
                     args.push('--include-partial-messages');
                 }
 
-                const permissionPrompt = this.config.permissionPromptTool !== false;
-                if (permissionPrompt) {
-                    args.push('--permission-prompt-tool', 'stdio');
+                if (this.config.permissionPromptToolName) {
+                    args.push('--permission-prompt-tool', this.config.permissionPromptToolName);
+                } else {
+                    const permissionPrompt = this.config.permissionPromptTool !== false;
+                    if (permissionPrompt) {
+                        args.push('--permission-prompt-tool', 'stdio');
+                    }
                 }
 
                 // Add max-thinking-tokens if enabled
@@ -334,11 +406,70 @@ export class ClaudeClient extends EventEmitter {
                 if (this.config.maxTurns && this.config.maxTurns > 0) {
                     args.push('--max-turns', this.config.maxTurns.toString());
                 }
+                if (this.config.maxBudgetUsd !== undefined) {
+                    args.push('--max-budget-usd', this.config.maxBudgetUsd.toString());
+                }
                 if (this.config.model) {
                     args.push('--model', this.config.model);
                 }
+                if (this.config.fallbackModel) {
+                    if (this.config.model && this.config.fallbackModel === this.config.model) {
+                        throw new Error('Fallback model cannot be the same as the main model.');
+                    }
+                    args.push('--fallback-model', this.config.fallbackModel);
+                }
                 if (this.config.agent) {
                     args.push('--agent', this.config.agent);
+                }
+                if (this.config.betas && this.config.betas.length > 0) {
+                    args.push('--betas', this.config.betas.join(','));
+                }
+                if (this.config.jsonSchema) {
+                    const schemaValue = typeof this.config.jsonSchema === 'string'
+                        ? this.config.jsonSchema
+                        : JSON.stringify(this.config.jsonSchema);
+                    args.push('--json-schema', schemaValue);
+                }
+                if (this.config.permissionMode) {
+                    args.push('--permission-mode', this.config.permissionMode);
+                }
+                if (this.config.allowDangerouslySkipPermissions) {
+                    args.push('--allow-dangerously-skip-permissions');
+                }
+                if (this.config.allowedTools && this.config.allowedTools.length > 0) {
+                    args.push('--allowedTools', this.config.allowedTools.join(','));
+                }
+                if (this.config.disallowedTools && this.config.disallowedTools.length > 0) {
+                    args.push('--disallowedTools', this.config.disallowedTools.join(','));
+                }
+                if (this.config.tools !== undefined) {
+                    if (Array.isArray(this.config.tools)) {
+                        args.push('--tools', this.config.tools.length === 0 ? '' : this.config.tools.join(','));
+                    } else {
+                        args.push('--tools', 'default');
+                    }
+                }
+                if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
+                    args.push('--mcp-config', JSON.stringify({ mcpServers: this.config.mcpServers }));
+                }
+                if (this.config.settingSources && this.config.settingSources.length > 0) {
+                    args.push('--setting-sources', this.config.settingSources.join(','));
+                }
+                if (this.config.strictMcpConfig) {
+                    args.push('--strict-mcp-config');
+                }
+                if (this.config.additionalDirectories && this.config.additionalDirectories.length > 0) {
+                    for (const dir of this.config.additionalDirectories) {
+                        args.push('--add-dir', dir);
+                    }
+                }
+                if (this.config.plugins && this.config.plugins.length > 0) {
+                    for (const plugin of this.config.plugins) {
+                        if (plugin.type !== 'local') {
+                            throw new Error(`Unsupported plugin type: ${plugin.type}`);
+                        }
+                        args.push('--plugin-dir', plugin.path);
+                    }
                 }
                 if (this.config.forkSession) {
                     args.push('--fork-session');
@@ -346,6 +477,33 @@ export class ClaudeClient extends EventEmitter {
                 if (this.config.resumeSessionAt) {
                     args.push('--resume-session-at', this.config.resumeSessionAt);
                 }
+                const extraArgs = { ...(this.config.extraArgs || {}) } as Record<string, any>;
+                if (this.config.sandbox) {
+                    let settingsObj: Record<string, any> = { sandbox: this.config.sandbox };
+                    if (extraArgs.settings) {
+                        if (typeof extraArgs.settings === 'string') {
+                            try {
+                                settingsObj = { ...JSON.parse(extraArgs.settings), sandbox: this.config.sandbox };
+                            } catch (err) {
+                                throw new Error('Failed to parse extraArgs.settings JSON while applying sandbox.');
+                            }
+                        } else if (typeof extraArgs.settings === 'object') {
+                            settingsObj = { ...extraArgs.settings, sandbox: this.config.sandbox };
+                        } else {
+                            throw new Error('extraArgs.settings must be a string or object when sandbox is set.');
+                        }
+                    }
+                    extraArgs.settings = JSON.stringify(settingsObj);
+                }
+                for (const [key, value] of Object.entries(extraArgs)) {
+                    if (value === null) {
+                        args.push(`--${key}`);
+                    } else {
+                        const val = typeof value === 'string' ? value : JSON.stringify(value);
+                        args.push(`--${key}`, val);
+                    }
+                }
+
                 if (this.config.persistSession === false) {
                     args.push('--no-session-persistence');
                 }
