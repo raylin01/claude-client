@@ -232,6 +232,13 @@ export interface HookCallbackEvent {
     respond: (responseData: ControlResponseData) => Promise<void>;
 }
 
+export interface TaskMessageEvent {
+    taskId: string;
+    sessionId?: string;
+    message: any;
+    timestamp: Date;
+}
+
 /**
  * Message types sent from extension to CLI (stdin)
  */

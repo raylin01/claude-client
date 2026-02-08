@@ -36,8 +36,11 @@ import {
     McpMessageRequest,
     McpMessageEvent,
     HookCallbackEvent,
-    ControlResponseEnvelope
+    ControlResponseEnvelope,
+    TaskMessageEvent
 } from './types.js';
+import type { TaskStore } from './task-store.js';
+import type { TaskMessageQueue } from './task-queue.js';
 
 export interface ClaudeClientConfig {
     /**
@@ -71,6 +74,14 @@ export interface ClaudeClientConfig {
         maxTokens?: number;
         level?: 'off' | 'low' | 'medium' | 'high' | 'auto' | 'default_on';
     };
+    /**
+     * Optional task store for MCP task tracking
+     */
+    taskStore?: TaskStore;
+    /**
+     * Optional task message queue
+     */
+    taskQueue?: TaskMessageQueue;
 }
 
 export interface ToolUseStartEvent {
@@ -90,6 +101,7 @@ export declare interface ClaudeClient {
     on(event: 'system', listener: (message: SystemMessage) => void): this;
     on(event: 'mcp_message', listener: (event: McpMessageEvent) => void): this;
     on(event: 'hook_callback', listener: (event: HookCallbackEvent) => void): this;
+    on(event: 'task_message', listener: (event: TaskMessageEvent) => void): this;
     on(event: 'message', listener: (message: AssistantMessage) => void): this;
     on(event: 'stream_event', listener: (event: StreamEventMessage) => void): this;
     on(event: 'text_delta', listener: (text: string) => void): this;
@@ -154,6 +166,8 @@ export class ClaudeClient extends EventEmitter {
         reject: (error: Error) => void;
         timeout: NodeJS.Timeout;
     }>();
+    private taskStore: TaskStore | null = null;
+    private taskQueue: TaskMessageQueue | null = null;
     private readonly mcpResponseTimeoutMs = parseInt(process.env.CLAUDE_CLIENT_MCP_TIMEOUT_MS || '2000');
     
     // Message queue for when Claude is busy
@@ -166,6 +180,8 @@ export class ClaudeClient extends EventEmitter {
         if (config.sessionId) {
             this._sessionId = config.sessionId;
         }
+        this.taskStore = config.taskStore || null;
+        this.taskQueue = config.taskQueue || null;
     }
 
     get sessionId(): string | null {
@@ -693,6 +709,9 @@ export class ClaudeClient extends EventEmitter {
                 debugLog(`Unhandled message type: ${message.type} - ${JSON.stringify(message).slice(0, 200)}`);
                 break;
         }
+
+        // Task routing (best-effort)
+        this.handleTaskMessage(message);
     }
 
     private handleStreamEvent(event: any): void {
@@ -809,4 +828,60 @@ export class ClaudeClient extends EventEmitter {
             }
         }
     }
+
+    private handleTaskMessage(message: any): void {
+        const taskId = extractRelatedTaskId(message, 6);
+        if (!taskId) return;
+
+        const event: TaskMessageEvent = {
+            taskId,
+            sessionId: this._sessionId || undefined,
+            message,
+            timestamp: new Date()
+        };
+
+        if (this.taskQueue) {
+            void this.taskQueue.enqueue(taskId, {
+                taskId,
+                sessionId: event.sessionId,
+                message,
+                timestamp: event.timestamp
+            });
+        }
+
+        this.emit('task_message', event);
+    }
+}
+
+const RELATED_TASK_KEY = 'io.modelcontextprotocol/related-task';
+
+function extractRelatedTaskId(payload: any, maxDepth: number): string | null {
+    if (!payload || typeof payload !== 'object') return null;
+
+    const stack = [{ value: payload, depth: 0 }];
+    const visited = new Set<any>();
+
+    while (stack.length > 0) {
+        const currentEntry = stack.pop();
+        if (!currentEntry) continue;
+        const { value: current, depth } = currentEntry;
+        if (!current || typeof current !== 'object') continue;
+        if (visited.has(current)) continue;
+        visited.add(current);
+
+        if (depth > maxDepth) continue;
+
+        const meta = (current as any)._meta;
+        if (meta && meta[RELATED_TASK_KEY] && meta[RELATED_TASK_KEY].taskId) {
+            return String(meta[RELATED_TASK_KEY].taskId);
+        }
+
+        for (const value of Object.values(current)) {
+            if (value && typeof value === 'object') {
+                stack.push({ value, depth: depth + 1 });
+            }
+        }
+    }
+
+    return null;
 }
