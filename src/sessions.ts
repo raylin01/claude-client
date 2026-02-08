@@ -5,7 +5,8 @@
  */
 
 import { readFileSync, readdirSync, existsSync, statSync, watch, FSWatcher } from 'fs';
-import { join, basename } from 'path';
+import { readFile, readdir, stat } from 'fs/promises';
+import { join, basename, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { EventEmitter } from 'events';
 
@@ -97,15 +98,34 @@ const PROJECTS_DIR = join(CLAUDE_DIR, 'projects');
  * Convert project path to escaped directory name
  */
 export function escapeProjectPath(projectPath: string): string {
-    return projectPath.replace(/\//g, '-');
+    // Match Claude Code extension encoding: replace any non-alphanumeric with '-'
+    // This is lossy but ensures we hit the correct storage folder name.
+    return projectPath.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
 /**
  * Convert escaped directory name back to project path
  */
 export function unescapeProjectPath(escapedPath: string): string {
-    // First char is always '-' for absolute paths
+    // Legacy fallback only. This is lossy because the extension encoding is lossy.
+    // Prefer reading projectPath from sessions-index.json when available.
     return escapedPath.replace(/-/g, '/');
+}
+
+function deriveProjectPath(storagePath: string, escapedPath: string): string {
+    const indexPath = join(storagePath, 'sessions-index.json');
+    if (existsSync(indexPath)) {
+        try {
+            const index = JSON.parse(readFileSync(indexPath, 'utf-8')) as SessionsIndex;
+            const entryPath = index.entries?.find(e => typeof e.projectPath === 'string')?.projectPath;
+            if (entryPath && isAbsolute(entryPath)) {
+                return entryPath;
+            }
+        } catch {
+            // Fall back to legacy unescape
+        }
+    }
+    return unescapeProjectPath(escapedPath);
 }
 
 /**
@@ -133,7 +153,7 @@ export function listProjects(): ProjectInfo[] {
             if (dir.name === '.' || dir.name === '..') continue;
             
             const storagePath = join(PROJECTS_DIR, dir.name);
-            const projectPath = unescapeProjectPath(dir.name);
+            const projectPath = deriveProjectPath(storagePath, dir.name);
             
             // Get session count
             let sessionCount = 0;
@@ -168,23 +188,81 @@ export function listProjects(): ProjectInfo[] {
 }
 
 /**
+ * Async version of listProjects to avoid blocking the event loop
+ */
+export async function listProjectsAsync(): Promise<ProjectInfo[]> {
+    if (!existsSync(PROJECTS_DIR)) {
+        return [];
+    }
+
+    const projects: ProjectInfo[] = [];
+
+    try {
+        const dirs = await readdir(PROJECTS_DIR, { withFileTypes: true });
+
+        for (const dir of dirs) {
+            if (!dir.isDirectory()) continue;
+            if (dir.name === '.' || dir.name === '..') continue;
+
+            const storagePath = join(PROJECTS_DIR, dir.name);
+            const projectPath = deriveProjectPath(storagePath, dir.name);
+
+            let sessionCount = 0;
+            const indexPath = join(storagePath, 'sessions-index.json');
+            if (existsSync(indexPath)) {
+                try {
+                    const index = JSON.parse(await readFile(indexPath, 'utf-8')) as SessionsIndex;
+                    sessionCount = index.entries?.length || 0;
+                } catch {
+                    const files = await readdir(storagePath);
+                    sessionCount = files.filter(f => f.endsWith('.jsonl')).length;
+                }
+            }
+
+            const statInfo = await stat(storagePath);
+
+            projects.push({
+                path: projectPath,
+                escapedPath: dir.name,
+                storagePath,
+                sessionCount,
+                lastModified: statInfo.mtime
+            });
+        }
+    } catch (e) {
+        console.error('Error reading projects directory:', e);
+    }
+
+    return projects.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
+}
+
+/**
  * List sessions for a specific project
  */
-export function listSessions(projectPath: string): SessionEntry[] {
+/**
+ * List sessions for a specific project
+ */
+export async function listSessions(projectPath: string): Promise<SessionEntry[]> {
     const storagePath = getProjectStoragePath(projectPath);
     const indexPath = join(storagePath, 'sessions-index.json');
     
+    console.log(`[DEBUG] listSessions('${projectPath}') -> storagePath: '${storagePath}'`);
+
     if (!existsSync(indexPath)) {
+        console.log(`[DEBUG] sessions-index.json not found at '${indexPath}'`);
         return [];
     }
     
     try {
-        const index = JSON.parse(readFileSync(indexPath, 'utf-8')) as SessionsIndex;
+        const { readFile } = await import('fs/promises');
+        const content = await readFile(indexPath, 'utf-8');
+        const index = JSON.parse(content) as SessionsIndex;
+        console.log(`[DEBUG] Found ${index.entries?.length || 0} entries in index`);
         return (index.entries || []).sort((a, b) => 
             new Date(b.modified).getTime() - new Date(a.modified).getTime()
         );
     } catch (e) {
-        console.error('Error reading sessions index:', e);
+        console.error('[DEBUG] Error reading sessions index:', e);
         return [];
     }
 }
@@ -230,6 +308,63 @@ export function getSessionDetails(sessionId: string, projectPath: string): Sessi
             }
         }
         
+        return {
+            sessionId,
+            projectPath,
+            summary,
+            messages,
+            created,
+            modified,
+            gitBranch,
+            messageCount: messages.filter(m => m.type === 'user' || m.type === 'assistant').length
+        };
+    } catch (e) {
+        console.error('Error reading session details:', e);
+        return null;
+    }
+}
+
+/**
+ * Async version of getSessionDetails to avoid blocking the event loop
+ */
+export async function getSessionDetailsAsync(sessionId: string, projectPath: string): Promise<SessionDetails | null> {
+    const storagePath = getProjectStoragePath(projectPath);
+    const sessionPath = join(storagePath, `${sessionId}.jsonl`);
+
+    if (!existsSync(sessionPath)) {
+        return null;
+    }
+
+    try {
+        const content = await readFile(sessionPath, 'utf-8');
+        const lines = content.split('\n').filter(line => line.trim());
+        const messages: SessionMessage[] = [];
+        let summary: string | undefined;
+        let gitBranch: string | undefined;
+        let created: Date | undefined;
+        let modified: Date | undefined;
+
+        for (const line of lines) {
+            try {
+                const msg = JSON.parse(line) as SessionMessage;
+                messages.push(msg);
+
+                if (msg.type === 'summary' && msg.summary) {
+                    summary = msg.summary;
+                }
+                if (msg.gitBranch) {
+                    gitBranch = msg.gitBranch;
+                }
+                if (msg.timestamp) {
+                    const ts = new Date(msg.timestamp);
+                    if (!created || ts < created) created = ts;
+                    if (!modified || ts > modified) modified = ts;
+                }
+            } catch {
+                // Skip invalid lines
+            }
+        }
+
         return {
             sessionId,
             projectPath,
@@ -337,14 +472,18 @@ export class SessionWatcher extends EventEmitter {
         }
         
         // Initialize state
-        this.updateKnownState(projectPath);
+        this.updateKnownState(projectPath).catch(err => 
+            console.error(`Error initializing state for ${projectPath}:`, err)
+        );
         
         // Try to use fs.watch first
         try {
             const watcher = watch(storagePath, { persistent: false }, (eventType, filename) => {
                 if (filename === 'sessions-index.json' || filename?.endsWith('.jsonl')) {
                     this.recordActivity(projectPath);
-                    this.checkForChanges(projectPath);
+                    this.checkForChanges(projectPath).catch(err => 
+                        console.error(`Error checking for changes in ${projectPath}:`, err)
+                    );
                 }
             });
             
@@ -367,7 +506,9 @@ export class SessionWatcher extends EventEmitter {
      */
     private startPolling(projectPath: string): void {
         const poll = () => {
-            this.checkForChanges(projectPath);
+            this.checkForChanges(projectPath).catch(err => 
+                console.error(`Polling error for ${projectPath}:`, err)
+            );
             
             // Schedule next poll with adaptive interval
             const interval = this.getPollInterval(projectPath);
@@ -381,8 +522,8 @@ export class SessionWatcher extends EventEmitter {
     /**
      * Update known state for a project
      */
-    private updateKnownState(projectPath: string): void {
-        const sessions = listSessions(projectPath);
+    private async updateKnownState(projectPath: string): Promise<void> {
+        const sessions = await listSessions(projectPath);
         const stateMap = new Map<string, number>();
         
         for (const session of sessions) {
@@ -395,9 +536,9 @@ export class SessionWatcher extends EventEmitter {
     /**
      * Check for changes in a project
      */
-    private checkForChanges(projectPath: string): void {
+    private async checkForChanges(projectPath: string): Promise<void> {
         const previousState = this.lastKnownState.get(projectPath) || new Map();
-        const sessions = listSessions(projectPath);
+        const sessions = await listSessions(projectPath);
         
         for (const session of sessions) {
             // Skip sessions we own
@@ -416,7 +557,7 @@ export class SessionWatcher extends EventEmitter {
             }
         }
         
-        this.updateKnownState(projectPath);
+        await this.updateKnownState(projectPath);
     }
     
     /**
