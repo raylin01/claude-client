@@ -93,18 +93,26 @@ function listProjects() {
 /**
  * List sessions for a specific project
  */
-function listSessions(projectPath) {
+/**
+ * List sessions for a specific project
+ */
+async function listSessions(projectPath) {
     const storagePath = getProjectStoragePath(projectPath);
     const indexPath = (0, path_1.join)(storagePath, 'sessions-index.json');
+    console.log(`[DEBUG] listSessions('${projectPath}') -> storagePath: '${storagePath}'`);
     if (!(0, fs_1.existsSync)(indexPath)) {
+        console.log(`[DEBUG] sessions-index.json not found at '${indexPath}'`);
         return [];
     }
     try {
-        const index = JSON.parse((0, fs_1.readFileSync)(indexPath, 'utf-8'));
+        const { readFile } = await import('fs/promises');
+        const content = await readFile(indexPath, 'utf-8');
+        const index = JSON.parse(content);
+        console.log(`[DEBUG] Found ${index.entries?.length || 0} entries in index`);
         return (index.entries || []).sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime());
     }
     catch (e) {
-        console.error('Error reading sessions index:', e);
+        console.error('[DEBUG] Error reading sessions index:', e);
         return [];
     }
 }
@@ -230,13 +238,13 @@ class SessionWatcher extends events_1.EventEmitter {
             return;
         }
         // Initialize state
-        this.updateKnownState(projectPath);
+        this.updateKnownState(projectPath).catch(err => console.error(`Error initializing state for ${projectPath}:`, err));
         // Try to use fs.watch first
         try {
             const watcher = (0, fs_1.watch)(storagePath, { persistent: false }, (eventType, filename) => {
                 if (filename === 'sessions-index.json' || filename?.endsWith('.jsonl')) {
                     this.recordActivity(projectPath);
-                    this.checkForChanges(projectPath);
+                    this.checkForChanges(projectPath).catch(err => console.error(`Error checking for changes in ${projectPath}:`, err));
                 }
             });
             watcher.on('error', (error) => {
@@ -257,7 +265,7 @@ class SessionWatcher extends events_1.EventEmitter {
      */
     startPolling(projectPath) {
         const poll = () => {
-            this.checkForChanges(projectPath);
+            this.checkForChanges(projectPath).catch(err => console.error(`Polling error for ${projectPath}:`, err));
             // Schedule next poll with adaptive interval
             const interval = this.getPollInterval(projectPath);
             const timer = setTimeout(poll, interval);
@@ -268,8 +276,8 @@ class SessionWatcher extends events_1.EventEmitter {
     /**
      * Update known state for a project
      */
-    updateKnownState(projectPath) {
-        const sessions = listSessions(projectPath);
+    async updateKnownState(projectPath) {
+        const sessions = await listSessions(projectPath);
         const stateMap = new Map();
         for (const session of sessions) {
             stateMap.set(session.sessionId, session.fileMtime);
@@ -279,9 +287,9 @@ class SessionWatcher extends events_1.EventEmitter {
     /**
      * Check for changes in a project
      */
-    checkForChanges(projectPath) {
+    async checkForChanges(projectPath) {
         const previousState = this.lastKnownState.get(projectPath) || new Map();
-        const sessions = listSessions(projectPath);
+        const sessions = await listSessions(projectPath);
         for (const session of sessions) {
             // Skip sessions we own
             if (this.ownedSessions.has(session.sessionId)) {
@@ -297,7 +305,7 @@ class SessionWatcher extends events_1.EventEmitter {
                 this.emit('session_updated', session);
             }
         }
-        this.updateKnownState(projectPath);
+        await this.updateKnownState(projectPath);
     }
     /**
      * Stop watching a project

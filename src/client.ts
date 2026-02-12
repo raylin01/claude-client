@@ -32,12 +32,13 @@ import {
     StreamEventMessage,
     ControlResponseData,
     ControlCancelRequestMessage,
-    SystemMessage,
     McpMessageRequest,
     McpMessageEvent,
     HookCallbackEvent,
     ControlResponseEnvelope,
-    TaskMessageEvent
+    TaskMessageEvent,
+    ClaudeSupportedModel,
+    ClaudeSupportedModelsResponse
 } from './types.js';
 import type { TaskStore } from './task-store.js';
 import type { TaskMessageQueue } from './task-queue.js';
@@ -268,6 +269,7 @@ export class ClaudeClient extends EventEmitter {
     
     // Track current state
     private _sessionId: string | null = null;
+    private _lastSystemModel: string | null = null;
     private _isThinking = false;
     
     // Accumulated content for streaming mode
@@ -672,6 +674,32 @@ export class ClaudeClient extends EventEmitter {
     }
 
     /**
+     * Probe Claude CLI for supported models (best effort).
+     */
+    async listSupportedModels(timeoutMs: number = 10000): Promise<ClaudeSupportedModelsResponse> {
+        const response = await this.sendControlRequest({
+            subtype: 'initialize',
+            hooks: [],
+            sdkMcpServers: []
+        }, timeoutMs);
+
+        const payload = response?.response ?? response ?? {};
+        const rawModels = Array.isArray(payload?.models) ? payload.models : [];
+        const models = this.normalizeSupportedModels(rawModels);
+
+        let defaultModel = this._lastSystemModel || null;
+        if (!defaultModel) {
+            defaultModel = models.find(model => model.isDefault)?.id || null;
+        }
+
+        return {
+            models,
+            defaultModel,
+            raw: payload
+        };
+    }
+
+    /**
      * Set max thinking tokens for the session
      */
     async setMaxThinkingTokens(maxTokens: number): Promise<void> {
@@ -802,6 +830,7 @@ export class ClaudeClient extends EventEmitter {
                 if (message.subtype === 'init') {
                     debugLog(`System init: session_id=${message.session_id}`);
                     this._sessionId = message.session_id;
+                    this._lastSystemModel = message.model || null;
                     if (!this.readyEmitted) {
                         this.readyEmitted = true;
                         this.emit('ready');
@@ -956,7 +985,7 @@ export class ClaudeClient extends EventEmitter {
                 break;
 
             default:
-                debugLog(`Unhandled message type: ${message.type} - ${JSON.stringify(message).slice(0, 200)}`);
+                debugLog(`Unhandled message type: ${(message as any).type} - ${JSON.stringify(message).slice(0, 200)}`);
                 break;
         }
 
@@ -1077,6 +1106,41 @@ export class ClaudeClient extends EventEmitter {
                 });
             }
         }
+    }
+
+    private normalizeSupportedModels(rawModels: any[]): ClaudeSupportedModel[] {
+        const models: ClaudeSupportedModel[] = [];
+        const seen = new Set<string>();
+
+        for (const item of rawModels) {
+            if (typeof item === 'string') {
+                const id = item.trim();
+                if (!id || seen.has(id)) continue;
+                seen.add(id);
+                models.push({ id, label: id });
+                continue;
+            }
+
+            if (!item || typeof item !== 'object') continue;
+
+            const idCandidate = item.id ?? item.value ?? item.model ?? item.name ?? item.label;
+            const id = typeof idCandidate === 'string' ? idCandidate.trim() : '';
+            if (!id || seen.has(id)) continue;
+
+            const labelCandidate = item.label ?? item.displayName ?? item.name ?? item.value ?? item.model ?? id;
+            const label = typeof labelCandidate === 'string' ? labelCandidate.trim() : id;
+            const description = typeof item.description === 'string' ? item.description.trim() : undefined;
+
+            seen.add(id);
+            models.push({
+                id,
+                label: label || id,
+                description: description || undefined,
+                isDefault: Boolean(item.isDefault || item.default || item.selected)
+            });
+        }
+
+        return models;
     }
 
     private handleTaskMessage(message: any): void {

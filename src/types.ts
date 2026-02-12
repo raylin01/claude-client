@@ -118,6 +118,16 @@ export type ControlRequest =
     | SetMaxThinkingTokensRequest
     | InterruptRequest;
 
+export interface InitializeRequest {
+    subtype: 'initialize';
+    hooks?: any[];
+    sdkMcpServers?: string[];
+    jsonSchema?: Record<string, any> | null;
+    systemPrompt?: string;
+    appendSystemPrompt?: string;
+    agents?: any[];
+}
+
 export interface CanUseToolRequest {
     subtype: 'can_use_tool';
     tool_name?: string;
@@ -237,6 +247,19 @@ export interface TaskMessageEvent {
     sessionId?: string;
     message: any;
     timestamp: Date;
+}
+
+export interface ClaudeSupportedModel {
+    id: string;
+    label: string;
+    description?: string;
+    isDefault?: boolean;
+}
+
+export interface ClaudeSupportedModelsResponse {
+    models: ClaudeSupportedModel[];
+    defaultModel: string | null;
+    raw: unknown;
 }
 
 /**

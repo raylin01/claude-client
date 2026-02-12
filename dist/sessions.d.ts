@@ -86,7 +86,10 @@ export declare function listProjects(): ProjectInfo[];
 /**
  * List sessions for a specific project
  */
-export declare function listSessions(projectPath: string): SessionEntry[];
+/**
+ * List sessions for a specific project
+ */
+export declare function listSessions(projectPath: string): Promise<SessionEntry[]>;
 /**
  * Get detailed information about a session
  */
