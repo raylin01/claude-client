@@ -1,295 +1,34 @@
-
-import { spawn, ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import { createInterface } from 'readline';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
-
-import { 
-    SystemMessage, 
-    CliMessage, 
-    StreamEvent, 
-    ContentDelta, 
-    Usage, 
-    AssistantMessage, 
-    UserMessage,
-    ControlRequestMessage,
-    ControlResponseMessage,
-    InputMessage,
-    ResultMessage,
-    Suggestion,
-    PermissionScope,
-    StreamEventMessage,
-    ControlResponseData,
-    ControlCancelRequestMessage,
-    McpMessageRequest,
-    McpMessageEvent,
-    HookCallbackEvent,
-    ControlResponseEnvelope,
-    TaskMessageEvent,
-    ClaudeSupportedModel,
-    ClaudeSupportedModelsResponse
-} from './types.js';
-import type { TaskStore } from './task-store.js';
-import type { TaskMessageQueue } from './task-queue.js';
-
-export interface ClaudeClientConfig {
-    /**
-     * Working directory for the Claude CLI
-     */
-    cwd: string;
-    /**
-     * Optional custom path to claude binary
-     */
-    claudePath?: string;
-    /**
-     * Executable to use when claudePath points to a script (default: node)
-     */
-    executable?: string;
-    /**
-     * Extra args for the executable when claudePath points to a script
-     */
-    executableArgs?: string[];
-    /**
-     * Environment variables to pass to the CLI
-     */
-    env?: NodeJS.ProcessEnv;
-    /**
-     * Enable debug logging
-     */
-    debug?: boolean;
-    /**
-     * Optional debug logger callback.
-     */
-    debugLogger?: (message: string) => void;
-    /**
-     * Command line arguments to pass to the CLI
-     */
-    args?: string[];
-    /**
-     * Include partial messages (passes --include-partial-messages)
-     */
-    includePartialMessages?: boolean;
-    /**
-     * Use permission prompt tool over stdio (passes --permission-prompt-tool stdio)
-     */
-    permissionPromptTool?: boolean;
-    /**
-     * Custom permission prompt tool name (passes --permission-prompt-tool <name>)
-     */
-    permissionPromptToolName?: string;
-    /**
-     * Optional session ID to use before system/init arrives
-     */
-    sessionId?: string;
-    /**
-     * Resume an existing session ID (passes --resume)
-     */
-    resumeSessionId?: string;
-    /**
-     * Continue last conversation (passes --continue)
-     */
-    continueConversation?: boolean;
-    /**
-     * Fork session on resume (passes --fork-session)
-     */
-    forkSession?: boolean;
-    /**
-     * Resume at a specific message UUID (passes --resume-session-at)
-     */
-    resumeSessionAt?: string;
-    /**
-     * Disable session persistence (passes --no-session-persistence)
-     */
-    persistSession?: boolean;
-    /**
-     * Max turns for the session (passes --max-turns)
-     */
-    maxTurns?: number;
-    /**
-     * Max budget in USD (passes --max-budget-usd)
-     */
-    maxBudgetUsd?: number;
-    /**
-     * Initial model (passes --model)
-     */
-    model?: string;
-    /**
-     * Fallback model (passes --fallback-model)
-     */
-    fallbackModel?: string;
-    /**
-     * Agent name (passes --agent)
-     */
-    agent?: string;
-    /**
-     * Experimental betas (passes --betas)
-     */
-    betas?: string[];
-    /**
-     * JSON schema for input (passes --json-schema)
-     */
-    jsonSchema?: Record<string, any> | string;
-    /**
-     * Permission mode (passes --permission-mode)
-     */
-    permissionMode?: 'default' | 'acceptEdits';
-    /**
-     * Allow skipping permissions dangerously (passes --allow-dangerously-skip-permissions)
-     */
-    allowDangerouslySkipPermissions?: boolean;
-    /**
-     * Allowed tools list (passes --allowedTools)
-     */
-    allowedTools?: string[];
-    /**
-     * Disallowed tools list (passes --disallowedTools)
-     */
-    disallowedTools?: string[];
-    /**
-     * Tools list (passes --tools)
-     */
-    tools?: string[] | 'default';
-    /**
-     * MCP server config (passes --mcp-config)
-     */
-    mcpServers?: Record<string, any>;
-    /**
-     * Strict MCP config (passes --strict-mcp-config)
-     */
-    strictMcpConfig?: boolean;
-    /**
-     * Setting sources (passes --setting-sources)
-     */
-    settingSources?: string[];
-    /**
-     * Additional directories (passes --add-dir)
-     */
-    additionalDirectories?: string[];
-    /**
-     * Plugins to load (passes --plugin-dir)
-     */
-    plugins?: Array<{ type: 'local'; path: string }>;
-    /**
-     * Extra CLI args as key-value flags (passes --key value / --key when null)
-     */
-    extraArgs?: Record<string, any>;
-    /**
-     * Optional sandbox setting (merged into settings for extraArgs)
-     */
-    sandbox?: string;
-    /**
-     * Enable SDK file checkpointing hooks (sets CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING)
-     */
-    enableFileCheckpointing?: boolean;
-    /**
-     * Thinking configuration
-     */
-    thinking?: {
-        maxTokens?: number;
-        level?: 'off' | 'low' | 'medium' | 'high' | 'auto' | 'default_on';
-    };
-    /**
-     * Optional task store for MCP task tracking
-     */
-    taskStore?: TaskStore;
-    /**
-     * Optional task message queue
-     */
-    taskQueue?: TaskMessageQueue;
-}
-
-export interface ToolUseStartEvent {
-    id: string;
-    name: string;
-    input: Record<string, any>;
-}
-
-export interface ToolResultEvent {
-    toolUseId: string;
-    content: string;
-    isError: boolean;
-}
-
-export declare interface ClaudeClient {
-    on(event: 'ready', listener: () => void): this;
-    on(event: 'system', listener: (message: SystemMessage) => void): this;
-    on(event: 'mcp_message', listener: (event: McpMessageEvent) => void): this;
-    on(event: 'hook_callback', listener: (event: HookCallbackEvent) => void): this;
-    on(event: 'task_message', listener: (event: TaskMessageEvent) => void): this;
-    on(event: 'message', listener: (message: AssistantMessage) => void): this;
-    on(event: 'stream_event', listener: (event: StreamEventMessage) => void): this;
-    on(event: 'text_delta', listener: (text: string) => void): this;
-    on(event: 'thinking_delta', listener: (thinking: string) => void): this;
-    on(event: 'text_accumulated', listener: (text: string) => void): this;
-    on(event: 'thinking_accumulated', listener: (thinking: string) => void): this;
-    on(event: 'tool_use', listener: (tool: any) => void): this;
-    on(event: 'tool_use_start', listener: (tool: ToolUseStartEvent) => void): this;
-    on(event: 'tool_result', listener: (result: ToolResultEvent) => void): this;
-    on(event: 'control_request', listener: (request: ControlRequestMessage) => void): this;
-    on(event: 'control_cancel_request', listener: (request: ControlCancelRequestMessage) => void): this;
-    on(event: 'control_response', listener: (response: ControlResponseEnvelope) => void): this;
-    on(event: 'user_message', listener: (message: UserMessage) => void): this;
-    on(event: 'error', listener: (error: Error) => void): this;
-    on(event: 'exit', listener: (code: number | null) => void): this;
-    on(event: 'result', listener: (result: ResultMessage) => void): this;
-    on(event: 'usage_update', listener: (usage: Usage) => void): this;
-    on(event: 'status_change', listener: (status: SessionStatus, pendingAction: PendingAction | null) => void): this;
-}
-
-/**
- * Session status
- */
-export type SessionStatus = 'running' | 'input_needed' | 'idle' | 'error';
-
-/**
- * Pending action requiring user input
- */
-export interface PendingAction {
-    type: 'permission' | 'question';
-    requestId: string;
-    toolName?: string;
-    input?: Record<string, any>;
-    question?: string;
-    options?: string[];
-}
-
 export class ClaudeClient extends EventEmitter {
-    private process: ChildProcess | null = null;
-    private stdinReady = false;
-    private config: ClaudeClientConfig;
-    private buffer = '';
-    private readyEmitted = false;
-    
+    process = null;
+    stdinReady = false;
+    config;
+    buffer = '';
+    readyEmitted = false;
     // Track current state
-    private _sessionId: string | null = null;
-    private _lastSystemModel: string | null = null;
-    private _isThinking = false;
-    
+    _sessionId = null;
+    _lastSystemModel = null;
+    _isThinking = false;
     // Accumulated content for streaming mode
-    private _accumulatedText = '';
-    private _accumulatedThinking = '';
-    
+    _accumulatedText = '';
+    _accumulatedThinking = '';
     // Tool input accumulation (input is streamed via input_json_delta)
-    private _currentToolBlock: { id: string; name: string; inputJson: string } | null = null;
-    
+    _currentToolBlock = null;
     // Status tracking
-    private _status: SessionStatus = 'idle';
-    private _pendingAction: PendingAction | null = null;
-    private pendingControlRequests = new Map<string, ControlRequestMessage>();
-    private pendingControlResponses = new Map<string, {
-        resolve: (value: any) => void;
-        reject: (error: Error) => void;
-        timeout: NodeJS.Timeout;
-    }>();
-    private taskStore: TaskStore | null = null;
-    private taskQueue: TaskMessageQueue | null = null;
-    private readonly mcpResponseTimeoutMs = parseInt(process.env.CLAUDE_CLIENT_MCP_TIMEOUT_MS || '2000');
-    
+    _status = 'idle';
+    _pendingAction = null;
+    pendingControlRequests = new Map();
+    pendingControlResponses = new Map();
+    taskStore = null;
+    taskQueue = null;
+    mcpResponseTimeoutMs = parseInt(process.env.CLAUDE_CLIENT_MCP_TIMEOUT_MS || '2000');
     // Message queue for when Claude is busy
-    private _messageQueue: string[] = [];
-    private _isProcessingMessage = false;
-
-    constructor(config: ClaudeClientConfig) {
+    _messageQueue = [];
+    _isProcessingMessage = false;
+    constructor(config) {
         super();
         this.config = config;
         if (config.sessionId) {
@@ -298,83 +37,74 @@ export class ClaudeClient extends EventEmitter {
         this.taskStore = config.taskStore || null;
         this.taskQueue = config.taskQueue || null;
     }
-
-    private logDebug(message: string): void {
-        if (!this.config.debug) return;
+    logDebug(message) {
+        if (!this.config.debug)
+            return;
         if (this.config.debugLogger) {
             this.config.debugLogger(message);
             return;
         }
     }
-
-    get sessionId(): string | null {
+    get sessionId() {
         return this._sessionId;
     }
-
     /**
      * Get current session status
      */
-    getStatus(): SessionStatus {
+    getStatus() {
         return this._status;
     }
-
     /**
      * Get pending action (if status is 'input_needed')
      */
-    getPendingAction(): PendingAction | null {
+    getPendingAction() {
         return this._pendingAction;
     }
-
     /**
      * Check if currently processing a message
      */
-    isProcessing(): boolean {
+    isProcessing() {
         return this._isProcessingMessage;
     }
-
     /**
      * Queue a message to be sent when Claude is ready
      * If not processing, sends immediately
      */
-    queueMessage(text: string): void {
+    queueMessage(text) {
         if (this._isProcessingMessage) {
             this._messageQueue.push(text);
             this.logDebug(`Message queued (queue size: ${this._messageQueue.length})`);
-        } else {
+        }
+        else {
             this.sendMessage(text);
         }
     }
-
     /**
      * Process next message in queue (called after result received)
      */
-    private processNextQueuedMessage(): void {
+    processNextQueuedMessage() {
         if (this._messageQueue.length > 0) {
-            const nextMessage = this._messageQueue.shift()!;
+            const nextMessage = this._messageQueue.shift();
             this.logDebug(`Processing queued message (${this._messageQueue.length} remaining)`);
             this.sendMessage(nextMessage);
         }
     }
-
     /**
      * Update status and emit event
      */
-    private setStatus(status: SessionStatus, pendingAction: PendingAction | null = null): void {
-        const changed = this._status !== status || 
+    setStatus(status, pendingAction = null) {
+        const changed = this._status !== status ||
             JSON.stringify(this._pendingAction) !== JSON.stringify(pendingAction);
-        
         this._status = status;
         this._pendingAction = pendingAction;
-        
         if (changed) {
             this.emit('status_change', status, pendingAction);
         }
     }
-
     /**
      * Start the Claude CLI process
      */
-    async start(): Promise<void> {
+    async start() {
         return new Promise((resolve, reject) => {
             try {
                 const claudePath = this.config.claudePath || 'claude';
@@ -384,28 +114,25 @@ export class ClaudeClient extends EventEmitter {
                     '--input-format', 'stream-json',
                     ...(this.config.args || [])
                 ];
-
                 const includePartial = this.config.includePartialMessages !== false;
                 if (includePartial) {
                     args.push('--include-partial-messages');
                 }
-
                 if (this.config.permissionPromptToolName) {
                     args.push('--permission-prompt-tool', this.config.permissionPromptToolName);
-                } else {
+                }
+                else {
                     const permissionPrompt = this.config.permissionPromptTool !== false;
                     if (permissionPrompt) {
                         args.push('--permission-prompt-tool', 'stdio');
                     }
                 }
-
                 // Add max-thinking-tokens if enabled
                 const maxTokens = this.getMaxThinkingTokens();
                 if (maxTokens > 0) {
                     args.push('--max-thinking-tokens', maxTokens.toString());
                     this.logDebug(`Extended thinking enabled: ${maxTokens} tokens`);
                 }
-
                 if (this.config.continueConversation) {
                     args.push('--continue');
                 }
@@ -454,7 +181,8 @@ export class ClaudeClient extends EventEmitter {
                 if (this.config.tools !== undefined) {
                     if (Array.isArray(this.config.tools)) {
                         args.push('--tools', this.config.tools.length === 0 ? '' : this.config.tools.join(','));
-                    } else {
+                    }
+                    else {
                         args.push('--tools', 'default');
                     }
                 }
@@ -486,19 +214,22 @@ export class ClaudeClient extends EventEmitter {
                 if (this.config.resumeSessionAt) {
                     args.push('--resume-session-at', this.config.resumeSessionAt);
                 }
-                const extraArgs = { ...(this.config.extraArgs || {}) } as Record<string, any>;
+                const extraArgs = { ...(this.config.extraArgs || {}) };
                 if (this.config.sandbox) {
-                    let settingsObj: Record<string, any> = { sandbox: this.config.sandbox };
+                    let settingsObj = { sandbox: this.config.sandbox };
                     if (extraArgs.settings) {
                         if (typeof extraArgs.settings === 'string') {
                             try {
                                 settingsObj = { ...JSON.parse(extraArgs.settings), sandbox: this.config.sandbox };
-                            } catch (err) {
+                            }
+                            catch (err) {
                                 throw new Error('Failed to parse extraArgs.settings JSON while applying sandbox.');
                             }
-                        } else if (typeof extraArgs.settings === 'object') {
+                        }
+                        else if (typeof extraArgs.settings === 'object') {
                             settingsObj = { ...extraArgs.settings, sandbox: this.config.sandbox };
-                        } else {
+                        }
+                        else {
                             throw new Error('extraArgs.settings must be a string or object when sandbox is set.');
                         }
                     }
@@ -507,24 +238,21 @@ export class ClaudeClient extends EventEmitter {
                 for (const [key, value] of Object.entries(extraArgs)) {
                     if (value === null) {
                         args.push(`--${key}`);
-                    } else {
+                    }
+                    else {
                         const val = typeof value === 'string' ? value : JSON.stringify(value);
                         args.push(`--${key}`, val);
                     }
                 }
-
                 if (this.config.persistSession === false) {
                     args.push('--no-session-persistence');
                 }
-
                 const isScript = /\.(js|mjs|cjs|ts|tsx|jsx)$/.test(claudePath);
                 const spawnBin = isScript ? (this.config.executable || 'node') : claudePath;
                 const spawnArgs = isScript
                     ? [...(this.config.executableArgs || []), claudePath, ...args]
                     : args;
-
                 this.logDebug(`Spawning: ${spawnBin} ${spawnArgs.join(' ')}`);
-
                 this.process = spawn(spawnBin, spawnArgs, {
                     cwd: this.config.cwd,
                     env: {
@@ -534,37 +262,31 @@ export class ClaudeClient extends EventEmitter {
                         // But use the entrypoint from legacy code which seems critical
                         CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
                         ...(this.config.enableFileCheckpointing ? { CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: 'true' } : {}),
-                        CI: 'true', 
+                        CI: 'true',
                     },
                     stdio: ['pipe', 'pipe', 'pipe'],
                     windowsHide: true
                 });
-
                 if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
                     throw new Error('Failed to create process pipes');
                 }
-
                 // Handle stdout (JSON stream)
                 const rl = createInterface({
                     input: this.process.stdout,
                     crlfDelay: Infinity
                 });
-
                 rl.on('line', (line) => this.processLine(line));
-
                 // Handle stderr (logs/errors)
                 this.process.stderr.on('data', (data) => {
                     const str = data.toString();
                     this.logDebug(`Stderr: ${str}`);
                     // Some crucial errors might come here
                 });
-
                 this.process.on('error', (err) => {
                     this.emit('error', err);
                     this.logDebug(`Process error: ${err.message}`);
                     reject(err);
                 });
-
                 this.process.on('exit', (code) => {
                     this.emit('exit', code);
                     this.logDebug(`Process exited with code: ${code}`);
@@ -572,13 +294,10 @@ export class ClaudeClient extends EventEmitter {
                     this.stdinReady = false;
                     this.readyEmitted = false;
                 });
-
                 this.process.stdin.on('drain', () => {
                     this.stdinReady = true;
                 });
-                
                 this.stdinReady = true;
-
                 // Emit ready after spawn so callers can proceed even if
                 // system/init is delayed or not emitted until first input.
                 setTimeout(() => {
@@ -587,21 +306,18 @@ export class ClaudeClient extends EventEmitter {
                         this.emit('ready');
                     }
                 }, 100);
-                
                 // We consider it started once the process is spawned, 
                 // but 'ready' event implies system init is done.
                 resolve();
-
-            } catch (error) {
+            }
+            catch (error) {
                 reject(error);
             }
         });
     }
-
-    async sendMessage(text: string): Promise<void> {
+    async sendMessage(text) {
         this._isProcessingMessage = true;
         this.setStatus('running');
-        
         const message = {
             type: 'user',
             session_id: this._sessionId || this.config.sessionId || 'pending',
@@ -611,26 +327,22 @@ export class ClaudeClient extends EventEmitter {
             },
             parent_tool_use_id: null
         };
-
         await this.writeToStdin(message);
     }
-
     /**
      * Send a control response (permission decision, answer, etc.)
      */
-    async sendControlResponse(requestId: string, responseData: ControlResponseData): Promise<void> {
-        this.logDebug(`Sending control_response: request_id=${requestId} behavior=${responseData.behavior} scope=${(responseData as any).scope || 'none'}`);
-        const message: ControlResponseMessage = {
+    async sendControlResponse(requestId, responseData) {
+        this.logDebug(`Sending control_response: request_id=${requestId} behavior=${responseData.behavior} scope=${responseData.scope || 'none'}`);
+        const message = {
             type: 'control_response',
             request_id: requestId,
             subtype: 'success', // Assuming success for now
             response: responseData
         };
-        
         // Wrap in the outer structure expected by CLI if needed, 
         // based on plugin implementation:
         // plugin sends: { type: 'control_response', response: { ... } }
-        
         await this.writeToStdin({
             type: 'control_response',
             response: {
@@ -640,78 +352,68 @@ export class ClaudeClient extends EventEmitter {
             }
         });
     }
-
     /**
      * Interrupt current operation (like Ctrl+C but via protocol)
      */
-    async interrupt(): Promise<void> {
+    async interrupt() {
         this.logDebug('Sending interrupt control request');
         await this.sendControlRequest({ subtype: 'interrupt' });
     }
-
     /**
      * Set permission mode (default or acceptEdits)
      */
-    async setPermissionMode(mode: 'default' | 'acceptEdits'): Promise<void> {
+    async setPermissionMode(mode) {
         await this.sendControlRequest({ subtype: 'set_permission_mode', mode });
     }
-
     /**
      * Set model for the session
      */
-    async setModel(model: string): Promise<void> {
+    async setModel(model) {
         await this.sendControlRequest({ subtype: 'set_model', model });
     }
-
     /**
      * Probe Claude CLI for supported models (best effort).
      */
-    async listSupportedModels(timeoutMs: number = 10000): Promise<ClaudeSupportedModelsResponse> {
+    async listSupportedModels(timeoutMs = 10000) {
         const response = await this.sendControlRequest({
             subtype: 'initialize',
             hooks: [],
             sdkMcpServers: []
         }, timeoutMs);
-
         const payload = response?.response ?? response ?? {};
         const rawModels = Array.isArray(payload?.models) ? payload.models : [];
         const models = this.normalizeSupportedModels(rawModels);
-
         let defaultModel = this._lastSystemModel || null;
         if (!defaultModel) {
             defaultModel = models.find(model => model.isDefault)?.id || null;
         }
-
         return {
             models,
             defaultModel,
             raw: payload
         };
     }
-
     /**
      * Set max thinking tokens for the session
      */
-    async setMaxThinkingTokens(maxTokens: number): Promise<void> {
+    async setMaxThinkingTokens(maxTokens) {
         await this.sendControlRequest({ subtype: 'set_max_thinking_tokens', max_thinking_tokens: maxTokens });
     }
-
     /**
      * Send an MCP server message to the CLI
      */
-    async sendMcpMessage(serverName: string, message: any): Promise<void> {
-        const request: McpMessageRequest = {
+    async sendMcpMessage(serverName, message) {
+        const request = {
             subtype: 'mcp_message',
             server_name: serverName,
             message
         };
         await this.sendControlRequest(request);
     }
-
     /**
      * Send an MCP response back to the CLI for a control_request.
      */
-    async sendMcpControlResponse(requestId: string, mcpResponse: any): Promise<void> {
+    async sendMcpControlResponse(requestId, mcpResponse) {
         await this.writeToStdin({
             type: 'control_response',
             response: {
@@ -723,45 +425,38 @@ export class ClaudeClient extends EventEmitter {
             }
         });
     }
-
     /**
      * Send a control_request and optionally wait for a control_response.
      */
-    async sendControlRequest(request: any, timeoutMs: number = 5000): Promise<any> {
+    async sendControlRequest(request, timeoutMs = 5000) {
         const requestId = randomUUID();
-
-        const promise = new Promise<any>((resolve, reject) => {
+        const promise = new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 this.pendingControlResponses.delete(requestId);
                 reject(new Error(`control_response timeout for ${requestId}`));
             }, timeoutMs);
-
             this.pendingControlResponses.set(requestId, { resolve, reject, timeout });
         });
-
         await this.writeToStdin({
             type: 'control_request',
             request_id: requestId,
             request
         });
-
         return promise;
     }
-
     /**
      * Terminate the session
      */
-    kill(): void {
+    kill() {
         if (this.process) {
             this.process.kill();
             this.process = null;
         }
     }
-
     /**
      * Send a message with multiple content blocks (text, images, etc.)
      */
-    async sendMessageWithContent(content: Array<{ type: string; [key: string]: any }>): Promise<void> {
+    async sendMessageWithContent(content) {
         const message = {
             type: 'user',
             session_id: this._sessionId || this.config.sessionId || 'pending',
@@ -771,39 +466,35 @@ export class ClaudeClient extends EventEmitter {
             },
             parent_tool_use_id: null
         };
-
         await this.writeToStdin(message);
     }
-
-    private async writeToStdin(data: any): Promise<void> {
+    async writeToStdin(data) {
         if (!this.process || !this.process.stdin) {
             throw new Error('Process not running');
         }
-
         const json = JSON.stringify(data);
         if (!this.process.stdin.write(json + '\n')) {
-            await new Promise<void>((resolve) => {
+            await new Promise((resolve) => {
                 this.process?.stdin?.once('drain', resolve);
             });
         }
     }
-
-    private processLine(line: string): void {
-        if (!line.trim()) return;
+    processLine(line) {
+        if (!line.trim())
+            return;
         this.logDebug(`Received line: ${line}`);
-
         try {
-            const message = JSON.parse(line) as CliMessage;
+            const message = JSON.parse(line);
             this.handleMessage(message);
-        } catch (error) {
+        }
+        catch (error) {
             if (this.config.debug) {
                 console.debug('Failed to parse JSON:', error, line);
             }
             this.logDebug(`Failed to parse JSON: ${error} Line: ${line}`);
         }
     }
-
-    private handleMessage(message: CliMessage): void {
+    handleMessage(message) {
         this.logDebug(`Received message type=${message.type}`);
         // Emit ready on first successful message if we haven't yet
         // (This acts as a fallback if system/init is missed or not sent first)
@@ -814,7 +505,6 @@ export class ClaudeClient extends EventEmitter {
                 this.emit('ready');
             }
         }
-
         switch (message.type) {
             case 'system':
                 if (message.subtype === 'init') {
@@ -828,26 +518,21 @@ export class ClaudeClient extends EventEmitter {
                     this.emit('system', message);
                 }
                 break;
-            
             case 'stream_event':
                 this.emit('stream_event', message);
                 this.handleStreamEvent(message.event);
                 break;
-
             case 'assistant':
                 this.emit('message', message);
                 break;
-
             case 'user':
                 this.emit('user_message', message);
                 // Emit tool_result events for each tool result in the message
                 this.handleToolResults(message);
                 break;
-
             case 'control_request':
-                this.logDebug(`Control request: id=${message.request_id} subtype=${message.request.subtype} tool=${(message.request as any).tool_name || 'n/a'}`);
+                this.logDebug(`Control request: id=${message.request_id} subtype=${message.request.subtype} tool=${message.request.tool_name || 'n/a'}`);
                 this.pendingControlRequests.set(message.request_id, message);
-                
                 // Update status to input_needed with pending action details
                 const req = message.request;
                 if (req.subtype === 'can_use_tool') {
@@ -861,16 +546,15 @@ export class ClaudeClient extends EventEmitter {
                         options: isQuestion ? req.input?.options : undefined
                     });
                 }
-                
                 this.emit('control_request', message);
-
                 if (req.subtype === 'mcp_message') {
-                    const serverName = (req as any).server_name;
-                    const msg = (req as any).message;
+                    const serverName = req.server_name;
+                    const msg = req.message;
                     let responded = false;
-                    let timeout: NodeJS.Timeout | null = null;
-                    const respond = async (mcpResponse: any) => {
-                        if (responded) return;
+                    let timeout = null;
+                    const respond = async (mcpResponse) => {
+                        if (responded)
+                            return;
                         responded = true;
                         if (timeout) {
                             clearTimeout(timeout);
@@ -878,7 +562,6 @@ export class ClaudeClient extends EventEmitter {
                         }
                         await this.sendMcpControlResponse(message.request_id, mcpResponse);
                     };
-
                     if (this.listenerCount('mcp_message') === 0) {
                         const defaultResponse = {
                             jsonrpc: '2.0',
@@ -886,9 +569,11 @@ export class ClaudeClient extends EventEmitter {
                             id: msg && typeof msg.id !== 'undefined' ? msg.id : 0
                         };
                         void respond(defaultResponse);
-                    } else {
+                    }
+                    else {
                         timeout = setTimeout(() => {
-                            if (responded) return;
+                            if (responded)
+                                return;
                             const defaultResponse = {
                                 jsonrpc: '2.0',
                                 result: {},
@@ -896,49 +581,46 @@ export class ClaudeClient extends EventEmitter {
                             };
                             void respond(defaultResponse);
                         }, this.mcpResponseTimeoutMs);
-
                         this.emit('mcp_message', {
                             serverName,
                             message: msg,
                             requestId: message.request_id,
                             respond
                         });
-
                         // Best-effort cleanup of timeout if response is sent quickly
                         // Fallback timeout will auto-respond if no handler replies.
                     }
                 }
-
                 if (req.subtype === 'hook_callback') {
                     let responded = false;
-                    const respond = async (responseData: ControlResponseData) => {
-                        if (responded) return;
+                    const respond = async (responseData) => {
+                        if (responded)
+                            return;
                         responded = true;
                         await this.sendControlResponse(message.request_id, responseData);
                     };
-
                     if (this.listenerCount('hook_callback') === 0) {
                         void respond({
                             behavior: 'allow',
                             updatedInput: req.input || {},
                             message: 'OK'
                         });
-                    } else {
+                    }
+                    else {
                         this.emit('hook_callback', {
-                            callbackId: (req as any).callback_id,
+                            callbackId: req.callback_id,
                             input: req.input,
-                            toolUseId: (req as any).tool_use_id,
+                            toolUseId: req.tool_use_id,
                             requestId: message.request_id,
                             respond
                         });
                     }
                 }
                 break;
-
             case 'control_response':
-                this.emit('control_response', message as ControlResponseEnvelope);
-                if ((message as any).response?.request_id) {
-                    const response = message as ControlResponseEnvelope;
+                this.emit('control_response', message);
+                if (message.response?.request_id) {
+                    const response = message;
                     const pending = this.pendingControlResponses.get(response.response.request_id);
                     if (pending) {
                         clearTimeout(pending.timeout);
@@ -947,7 +629,6 @@ export class ClaudeClient extends EventEmitter {
                     }
                 }
                 break;
-
             case 'control_cancel_request':
                 this.pendingControlRequests.delete(message.request_id);
                 if (this._pendingAction && this._pendingAction.requestId === message.request_id) {
@@ -955,61 +636,53 @@ export class ClaudeClient extends EventEmitter {
                 }
                 this.emit('control_cancel_request', message);
                 break;
-
             case 'result':
-                const resMessage = message as ResultMessage;
+                const resMessage = message;
                 this.logDebug(`Result received: subtype=${resMessage.subtype} duration=${resMessage.duration_ms}ms`);
-                
                 // Update status and process queue
                 this._isProcessingMessage = false;
                 this.setStatus(resMessage.is_error ? 'error' : 'idle');
-                
                 this.emit('result', resMessage);
-                
                 // Process next queued message if any
                 this.processNextQueuedMessage();
                 break;
-
             case 'keep_alive':
                 // minimal handling
                 break;
-
             default:
-                this.logDebug(`Unhandled message type: ${(message as any).type} - ${JSON.stringify(message).slice(0, 200)}`);
+                this.logDebug(`Unhandled message type: ${message.type} - ${JSON.stringify(message).slice(0, 200)}`);
                 break;
         }
-
         // Task routing (best-effort)
         this.handleTaskMessage(message);
     }
-
-    private handleStreamEvent(event: any): void {
+    handleStreamEvent(event) {
         switch (event.type) {
             case 'message_start':
                 // Reset accumulators for new message
                 this._accumulatedText = '';
                 this._accumulatedThinking = '';
                 break;
-                
             case 'content_block_delta':
-                const delta = event.delta as ContentDelta;
+                const delta = event.delta;
                 if (delta.type === 'text_delta' && delta.text) {
                     this._accumulatedText += delta.text;
-                    this.emit('text_delta', delta.text);  // Delta for backwards compat
-                    this.emit('text_accumulated', this._accumulatedText);  // Full accumulated
-                } else if (delta.type === 'thinking_delta' && delta.thinking) {
+                    this.emit('text_delta', delta.text); // Delta for backwards compat
+                    this.emit('text_accumulated', this._accumulatedText); // Full accumulated
+                }
+                else if (delta.type === 'thinking_delta' && delta.thinking) {
                     this._isThinking = true;
                     this._accumulatedThinking += delta.thinking;
-                    this.emit('thinking_delta', delta.thinking);  // Delta for backwards compat
-                    this.emit('thinking_accumulated', this._accumulatedThinking);  // Full accumulated
-                } else if (delta.type === 'input_json_delta' && delta.partial_json) {
+                    this.emit('thinking_delta', delta.thinking); // Delta for backwards compat
+                    this.emit('thinking_accumulated', this._accumulatedThinking); // Full accumulated
+                }
+                else if (delta.type === 'input_json_delta' && delta.partial_json) {
                     // Accumulate tool input JSON
                     if (this._currentToolBlock) {
                         this._currentToolBlock.inputJson += delta.partial_json;
                     }
                 }
                 break;
-            
             case 'content_block_start':
                 if (event.content_block?.type === 'tool_use') {
                     // Start tracking tool block - input will be accumulated via deltas
@@ -1020,7 +693,6 @@ export class ClaudeClient extends EventEmitter {
                     };
                 }
                 break;
-
             case 'content_block_stop':
                 // Tool execution completed - emit with accumulated input
                 if (this._currentToolBlock) {
@@ -1029,10 +701,10 @@ export class ClaudeClient extends EventEmitter {
                         if (this._currentToolBlock.inputJson) {
                             parsedInput = JSON.parse(this._currentToolBlock.inputJson);
                         }
-                    } catch (e) {
+                    }
+                    catch (e) {
                         this.logDebug(`Failed to parse tool input JSON: ${this._currentToolBlock.inputJson}`);
                     }
-                    
                     this.emit('tool_use_start', {
                         id: this._currentToolBlock.id,
                         name: this._currentToolBlock.name,
@@ -1041,52 +713,42 @@ export class ClaudeClient extends EventEmitter {
                     this._currentToolBlock = null;
                 }
                 break;
-
                 break;
-
             case 'message_delta':
                 // Contains usage stats
                 if (event.usage) {
                     this.emit('usage_update', event.usage);
                 }
                 break;
-
             case 'message_stop':
                 // Message completed
                 break;
-
             default:
                 this.logDebug(`Unhandled stream event type: ${event.type} - ${JSON.stringify(event).slice(0, 200)}`);
                 break;
         }
     }
-
     /**
      * Get max thinking tokens based on thinking level setting
      */
-    private getMaxThinkingTokens(): number {
+    getMaxThinkingTokens() {
         // If explicitly set in config
         if (this.config.thinking?.maxTokens !== undefined) {
             return this.config.thinking.maxTokens;
         }
-
         // Otherwise, determine from thinking level
         const level = this.config.thinking?.level || 'default_on';
-
         if (level === 'off') {
             return 0;
         }
-
         // Default for enabled thinking
         return 31999;
     }
-
     /**
      * Parse tool results from user messages and emit events
      */
-    private handleToolResults(message: UserMessage): void {
+    handleToolResults(message) {
         const content = message.message?.content || message.content || [];
-        
         for (const block of content) {
             if (block.type === 'tool_result') {
                 this.emit('tool_result', {
@@ -1097,30 +759,27 @@ export class ClaudeClient extends EventEmitter {
             }
         }
     }
-
-    private normalizeSupportedModels(rawModels: any[]): ClaudeSupportedModel[] {
-        const models: ClaudeSupportedModel[] = [];
-        const seen = new Set<string>();
-
+    normalizeSupportedModels(rawModels) {
+        const models = [];
+        const seen = new Set();
         for (const item of rawModels) {
             if (typeof item === 'string') {
                 const id = item.trim();
-                if (!id || seen.has(id)) continue;
+                if (!id || seen.has(id))
+                    continue;
                 seen.add(id);
                 models.push({ id, label: id });
                 continue;
             }
-
-            if (!item || typeof item !== 'object') continue;
-
+            if (!item || typeof item !== 'object')
+                continue;
             const idCandidate = item.id ?? item.value ?? item.model ?? item.name ?? item.label;
             const id = typeof idCandidate === 'string' ? idCandidate.trim() : '';
-            if (!id || seen.has(id)) continue;
-
+            if (!id || seen.has(id))
+                continue;
             const labelCandidate = item.label ?? item.displayName ?? item.name ?? item.value ?? item.model ?? id;
             const label = typeof labelCandidate === 'string' ? labelCandidate.trim() : id;
             const description = typeof item.description === 'string' ? item.description.trim() : undefined;
-
             seen.add(id);
             models.push({
                 id,
@@ -1129,21 +788,18 @@ export class ClaudeClient extends EventEmitter {
                 isDefault: Boolean(item.isDefault || item.default || item.selected)
             });
         }
-
         return models;
     }
-
-    private handleTaskMessage(message: any): void {
+    handleTaskMessage(message) {
         const taskId = extractRelatedTaskId(message, 6);
-        if (!taskId) return;
-
-        const event: TaskMessageEvent = {
+        if (!taskId)
+            return;
+        const event = {
             taskId,
             sessionId: this._sessionId || undefined,
             message,
             timestamp: new Date()
         };
-
         if (this.taskQueue) {
             void this.taskQueue.enqueue(taskId, {
                 taskId,
@@ -1152,40 +808,36 @@ export class ClaudeClient extends EventEmitter {
                 timestamp: event.timestamp
             });
         }
-
         this.emit('task_message', event);
     }
 }
-
 const RELATED_TASK_KEY = 'io.modelcontextprotocol/related-task';
-
-function extractRelatedTaskId(payload: any, maxDepth: number): string | null {
-    if (!payload || typeof payload !== 'object') return null;
-
+function extractRelatedTaskId(payload, maxDepth) {
+    if (!payload || typeof payload !== 'object')
+        return null;
     const stack = [{ value: payload, depth: 0 }];
-    const visited = new Set<any>();
-
+    const visited = new Set();
     while (stack.length > 0) {
         const currentEntry = stack.pop();
-        if (!currentEntry) continue;
+        if (!currentEntry)
+            continue;
         const { value: current, depth } = currentEntry;
-        if (!current || typeof current !== 'object') continue;
-        if (visited.has(current)) continue;
+        if (!current || typeof current !== 'object')
+            continue;
+        if (visited.has(current))
+            continue;
         visited.add(current);
-
-        if (depth > maxDepth) continue;
-
-        const meta = (current as any)._meta;
+        if (depth > maxDepth)
+            continue;
+        const meta = current._meta;
         if (meta && meta[RELATED_TASK_KEY] && meta[RELATED_TASK_KEY].taskId) {
             return String(meta[RELATED_TASK_KEY].taskId);
         }
-
         for (const value of Object.values(current)) {
             if (value && typeof value === 'object') {
                 stack.push({ value, depth: depth + 1 });
             }
         }
     }
-
     return null;
 }

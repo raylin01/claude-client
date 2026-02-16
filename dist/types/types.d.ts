@@ -130,8 +130,18 @@ export interface ControlRequestMessage {
     request_id: string;
     request: ControlRequest;
 }
-export interface ControlRequest {
-    subtype: 'can_use_tool' | 'hook_callback' | 'mcp_message';
+export type ControlRequest = CanUseToolRequest | HookCallbackRequest | McpMessageRequest | SetPermissionModeRequest | SetModelRequest | SetMaxThinkingTokensRequest | InterruptRequest;
+export interface InitializeRequest {
+    subtype: 'initialize';
+    hooks?: any[];
+    sdkMcpServers?: string[];
+    jsonSchema?: Record<string, any> | null;
+    systemPrompt?: string;
+    appendSystemPrompt?: string;
+    agents?: any[];
+}
+export interface CanUseToolRequest {
+    subtype: 'can_use_tool';
     tool_name?: string;
     input?: Record<string, any>;
     permission_suggestions?: Suggestion[];
@@ -139,7 +149,32 @@ export interface ControlRequest {
     decision_reason?: string;
     tool_use_id?: string;
     agent_id?: string;
+}
+export interface HookCallbackRequest {
+    subtype: 'hook_callback';
     callback_id?: string;
+    input?: Record<string, any>;
+    tool_use_id?: string;
+}
+export interface McpMessageRequest {
+    subtype: 'mcp_message';
+    server_name: string;
+    message: any;
+}
+export interface SetPermissionModeRequest {
+    subtype: 'set_permission_mode';
+    mode: 'default' | 'acceptEdits';
+}
+export interface SetModelRequest {
+    subtype: 'set_model';
+    model: string;
+}
+export interface SetMaxThinkingTokensRequest {
+    subtype: 'set_max_thinking_tokens';
+    max_thinking_tokens: number;
+}
+export interface InterruptRequest {
+    subtype: 'interrupt';
 }
 export interface Suggestion {
     type: 'allow' | 'deny' | 'allow_always' | 'deny_always';
@@ -158,6 +193,16 @@ export interface ControlResponseMessage {
     error?: string;
     pending_permission_requests?: ControlRequest[];
 }
+export interface ControlResponseEnvelope {
+    type: 'control_response';
+    response: {
+        subtype: 'success' | 'error';
+        request_id: string;
+        response?: ControlResponseData;
+        error?: string;
+        pending_permission_requests?: ControlRequest[];
+    };
+}
 export interface ControlResponseData {
     behavior: 'allow' | 'deny';
     message?: string;
@@ -173,10 +218,47 @@ export interface KeepAliveMessage {
     type: 'keep_alive';
 }
 /**
+ * Control cancel request (cancel pending control request)
+ */
+export interface ControlCancelRequestMessage {
+    type: 'control_cancel_request';
+    request_id: string;
+}
+export interface McpMessageEvent {
+    serverName: string;
+    message: any;
+    requestId: string;
+    respond: (mcpResponse: any) => Promise<void>;
+}
+export interface HookCallbackEvent {
+    callbackId?: string;
+    input?: Record<string, any>;
+    toolUseId?: string;
+    requestId: string;
+    respond: (responseData: ControlResponseData) => Promise<void>;
+}
+export interface TaskMessageEvent {
+    taskId: string;
+    sessionId?: string;
+    message: any;
+    timestamp: Date;
+}
+export interface ClaudeSupportedModel {
+    id: string;
+    label: string;
+    description?: string;
+    isDefault?: boolean;
+}
+export interface ClaudeSupportedModelsResponse {
+    models: ClaudeSupportedModel[];
+    defaultModel: string | null;
+    raw: unknown;
+}
+/**
  * Message types sent from extension to CLI (stdin)
  */
 export interface InputMessage {
-    type: 'user' | 'control_response' | 'interrupt';
+    type: 'user' | 'control_response' | 'control_request' | 'interrupt';
 }
 export interface UserInputMessage {
     type: 'user';
@@ -206,4 +288,4 @@ export interface ResultMessage {
     result: string;
     error?: string;
 }
-export type CliMessage = SystemMessage | StreamEventMessage | AssistantMessage | UserMessage | ControlRequestMessage | ControlResponseMessage | KeepAliveMessage | ResultMessage;
+export type CliMessage = SystemMessage | StreamEventMessage | AssistantMessage | UserMessage | ControlRequestMessage | ControlResponseMessage | ControlResponseEnvelope | ControlCancelRequestMessage | KeepAliveMessage | ResultMessage;

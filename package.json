@@ -1,28 +1,81 @@
 {
-    "name": "claude-client",
-    "version": "0.1.0",
-    "description": "A standalone Node.js client for controlling Claude Code CLI",
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts",
-    "scripts": {
-        "build": "tsc",
-        "watch": "tsc -w",
-        "test": "echo \"Error: no test specified\" && exit 1"
+  "name": "@raylin01/claude-client",
+  "version": "0.1.0",
+  "description": "Node.js client for controlling Claude Code CLI via stream-json protocol.",
+  "license": "ISC",
+  "author": "Ray Lin",
+  "type": "module",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
     },
-    "keywords": [
-        "claude",
-        "ai",
-        "cli",
-        "client",
-        "sdk"
-    ],
-    "author": "",
-    "license": "ISC",
-    "dependencies": {
-        "chalk": "^5.0.0"
+    "./sessions": {
+      "types": "./dist/types/sessions.d.ts",
+      "import": "./dist/esm/sessions.js",
+      "require": "./dist/cjs/sessions.js"
     },
-    "devDependencies": {
-        "typescript": "^5.0.0",
-        "@types/node": "^20.0.0"
+    "./mcp": {
+      "types": "./dist/types/mcp.d.ts",
+      "import": "./dist/esm/mcp.js",
+      "require": "./dist/cjs/mcp.js"
+    },
+    "./task-store": {
+      "types": "./dist/types/task-store.d.ts",
+      "import": "./dist/esm/task-store.js",
+      "require": "./dist/cjs/task-store.js"
+    },
+    "./task-queue": {
+      "types": "./dist/types/task-queue.d.ts",
+      "import": "./dist/esm/task-queue.js",
+      "require": "./dist/cjs/task-queue.js"
     }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "examples"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raylin01/claude-client.git"
+  },
+  "bugs": {
+    "url": "https://github.com/raylin01/claude-client/issues"
+  },
+  "homepage": "https://github.com/raylin01/claude-client#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "claude",
+    "anthropic",
+    "ai",
+    "cli",
+    "sdk",
+    "stream-json"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build:esm": "tsc -p tsconfig.build.esm.json",
+    "build:cjs": "tsc -p tsconfig.build.cjs.json && node ./scripts/write-cjs-package-json.mjs",
+    "build": "npm run clean && npm run build:esm && npm run build:cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/**/*.test.mjs",
+    "test:coverage": "npm run build && node --test --experimental-test-coverage test/**/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
 }

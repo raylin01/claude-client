@@ -1,89 +1,111 @@
-# Claude Client (@discode/claude-client)
+# @raylin01/claude-client
 
-A standalone Node.js client for controlling the Claude Code CLI. This library allows you to programmatically interact with Claude, handling authentication, sessions, and tool use via a simple event-driven API.
+Node.js client for controlling the Claude Code CLI with stream-json I/O.
 
-## Installation
+## Install
 
 ```bash
-npm install @discode/claude-client
+npm install @raylin01/claude-client
 ```
 
-## Prerequisites
+## Requirements
 
-- Use `claude login` in your terminal to authenticate before using this library.
 - Node.js 18+
+- Claude CLI installed and authenticated (`claude login`)
 
-## Basic Usage
+## Quickstart
 
-```typescript
-import { ClaudeClient } from "@discode/claude-client";
+```ts
+import { ClaudeClient } from '@raylin01/claude-client';
 
 const client = new ClaudeClient({
-    cwd: process.cwd(),
-    debug: false,
+  cwd: process.cwd(),
+  debug: false
 });
 
-// Event Handling
-client.on("ready", () => {
-    console.log("Connected to Claude CLI!");
-    client.sendMessage("Hello, who are you?");
+client.on('ready', () => {
+  client.sendMessage('Summarize this project.');
 });
 
-client.on("text_delta", (text) => {
-    process.stdout.write(text);
+client.on('text_delta', (text) => {
+  process.stdout.write(text);
 });
 
-client.on("thinking_delta", (thinking) => {
-    // Handle thinking blocks (e.g. show a spinner or debug log)
-    console.log("[Thinking]", thinking);
+client.on('result', (result) => {
+  console.log('\nDone:', result.subtype);
 });
 
-client.on("message", (msg) => {
-    console.log("\nResponse Complete");
-});
-
-// Permissions / Control Requests
-client.on("control_request", async (req) => {
-    console.log("Permission requested:", req.request.subtype);
-
-    // Automatically approve tool use for demo
-    if (req.request.subtype === "can_use_tool") {
-        await client.sendControlResponse(req.request_id, {
-            behavior: "allow",
-        });
-    }
-});
-
-// Start the session
 await client.start();
 ```
 
-## API Reference
+## Event Model
 
-### `ClaudeClient`
+- `ready`: CLI process is ready
+- `text_delta`: incremental assistant text output
+- `thinking_delta`: incremental thinking output
+- `message`: full assistant message object
+- `control_request`: permission/question callback from Claude
+- `result`: turn completion event
+- `error`: transport/process error
 
-#### Configuration
+## API
 
-- `cwd`: Working directory for the session.
-- `claudePath`: (Optional) Path to `claude` binary.
-- `env`: (Optional) Environment variables.
-- `args`: (Optional) Extra CLI arguments.
+### `new ClaudeClient(config)`
 
-#### Methods
+Key config fields:
 
-- `start()`: Spawns the CLI process.
-- `sendMessage(text)`: Sends a user message.
-- `sendControlResponse(requestId, data)`: Responds to permission requests or questions.
-- `kill()`: Terminates the process.
+- `cwd` (required): working directory
+- `claudePath`: custom CLI path
+- `args`: extra CLI arguments
+- `model`, `fallbackModel`, `maxTurns`, `maxBudgetUsd`
+- `permissionMode`, `allowedTools`, `disallowedTools`
+- `debug`: enable debug logs
+- `debugLogger`: optional custom logger callback
 
-#### Events
+### Core methods
 
-- `ready`: Session initialized.
-- `text_delta`: Real-time text output.
-- `thinking_delta`: Real-time thinking output.
-- `message`: Full assistant message (when complete).
-- `control_request`: Permission request (requires response).
-- `error`: System error.
+- `start()`
+- `sendMessage(text)`
+- `sendMessageWithContent(content)`
+- `sendControlResponse(requestId, response)`
+- `sendControlRequest(request, timeoutMs?)`
+- `setModel(model)`
+- `setPermissionMode(mode)`
+- `setMaxThinkingTokens(maxTokens)`
+- `listSupportedModels()`
+- `interrupt()`
+- `kill()`
+
+### Utility exports
+
+- `@raylin01/claude-client/sessions`
+- `@raylin01/claude-client/mcp`
+- `@raylin01/claude-client/task-store`
+- `@raylin01/claude-client/task-queue`
+
+## Examples
+
+See `/examples`:
+
+- `basic.ts`
+- `events.ts`
+- `error-handling.ts`
+
+## Troubleshooting
+
+- If `ready` never fires, verify your `claude` binary path and authentication.
+- Enable `debug: true` and provide `debugLogger` to inspect protocol events.
+- If permission requests stall, ensure you handle `control_request`.
+
+## Versioning
+
+This package uses independent semver releases.
+
+## Used by DisCode
+
+DisCode uses this package as a real-world integration example:
+
+- [raylin01/DisCode](https://github.com/raylin01/DisCode)
 
 ## License
 

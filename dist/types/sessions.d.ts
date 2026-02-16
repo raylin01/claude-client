@@ -84,8 +84,9 @@ export declare function getProjectStoragePath(projectPath: string): string;
  */
 export declare function listProjects(): ProjectInfo[];
 /**
- * List sessions for a specific project
+ * Async version of listProjects to avoid blocking the event loop
  */
+export declare function listProjectsAsync(): Promise<ProjectInfo[]>;
 /**
  * List sessions for a specific project
  */
@@ -94,6 +95,10 @@ export declare function listSessions(projectPath: string): Promise<SessionEntry[
  * Get detailed information about a session
  */
 export declare function getSessionDetails(sessionId: string, projectPath: string): SessionDetails | null;
+/**
+ * Async version of getSessionDetails to avoid blocking the event loop
+ */
+export declare function getSessionDetailsAsync(sessionId: string, projectPath: string): Promise<SessionDetails | null>;
 /**
  * Get messages from a session since a given timestamp
  */
