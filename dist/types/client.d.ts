@@ -169,6 +169,18 @@ export interface ClaudeClientConfig {
      * Optional task message queue
      */
     taskQueue?: TaskMessageQueue;
+    /**
+     * Enable print mode (-p flag) - runs one-shot commands instead of persistent session.
+     * In print mode, each message spawns a new process but session persistence is
+     * maintained via --session-id (first message) and --resume (subsequent messages).
+     */
+    printMode?: boolean;
+    /**
+     * In print mode, automatically generate a session ID if not provided.
+     * This allows multi-turn conversations even with print mode.
+     * Default: true when printMode is enabled
+     */
+    printModeAutoSession?: boolean;
 }
 export interface ToolUseStartEvent {
     id: string;
@@ -222,13 +234,10 @@ export interface PendingAction {
 }
 export declare class ClaudeClient extends EventEmitter {
     private process;
-    private stdinReady;
     private config;
-    private buffer;
     private readyEmitted;
     private _sessionId;
     private _lastSystemModel;
-    private _isThinking;
     private _accumulatedText;
     private _accumulatedThinking;
     private _currentToolBlock;
@@ -241,6 +250,7 @@ export declare class ClaudeClient extends EventEmitter {
     private readonly mcpResponseTimeoutMs;
     private _messageQueue;
     private _isProcessingMessage;
+    private _printModeFirstMessage;
     constructor(config: ClaudeClientConfig);
     private logDebug;
     get sessionId(): string | null;
@@ -274,6 +284,14 @@ export declare class ClaudeClient extends EventEmitter {
      */
     start(): Promise<void>;
     sendMessage(text: string): Promise<void>;
+    /**
+     * Send a message in print mode (spawns new process)
+     */
+    private sendMessagePrintMode;
+    /**
+     * Build command line arguments for print mode
+     */
+    private buildPrintModeArgs;
     /**
      * Send a control response (permission decision, answer, etc.)
      */

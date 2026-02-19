@@ -4,20 +4,15 @@ import { createInterface } from 'readline';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 
-import { 
-    SystemMessage, 
-    CliMessage, 
-    StreamEvent, 
-    ContentDelta, 
-    Usage, 
-    AssistantMessage, 
+import {
+    SystemMessage,
+    CliMessage,
+    ContentDelta,
+    Usage,
+    AssistantMessage,
     UserMessage,
     ControlRequestMessage,
-    ControlResponseMessage,
-    InputMessage,
     ResultMessage,
-    Suggestion,
-    PermissionScope,
     StreamEventMessage,
     ControlResponseData,
     ControlCancelRequestMessage,
@@ -196,6 +191,18 @@ export interface ClaudeClientConfig {
      * Optional task message queue
      */
     taskQueue?: TaskMessageQueue;
+    /**
+     * Enable print mode (-p flag) - runs one-shot commands instead of persistent session.
+     * In print mode, each message spawns a new process but session persistence is
+     * maintained via --session-id (first message) and --resume (subsequent messages).
+     */
+    printMode?: boolean;
+    /**
+     * In print mode, automatically generate a session ID if not provided.
+     * This allows multi-turn conversations even with print mode.
+     * Default: true when printMode is enabled
+     */
+    printModeAutoSession?: boolean;
 }
 
 export interface ToolUseStartEvent {
@@ -255,23 +262,20 @@ export interface PendingAction {
 
 export class ClaudeClient extends EventEmitter {
     private process: ChildProcess | null = null;
-    private stdinReady = false;
     private config: ClaudeClientConfig;
-    private buffer = '';
     private readyEmitted = false;
-    
+
     // Track current state
     private _sessionId: string | null = null;
     private _lastSystemModel: string | null = null;
-    private _isThinking = false;
-    
+
     // Accumulated content for streaming mode
     private _accumulatedText = '';
     private _accumulatedThinking = '';
-    
+
     // Tool input accumulation (input is streamed via input_json_delta)
     private _currentToolBlock: { id: string; name: string; inputJson: string } | null = null;
-    
+
     // Status tracking
     private _status: SessionStatus = 'idle';
     private _pendingAction: PendingAction | null = null;
@@ -284,10 +288,13 @@ export class ClaudeClient extends EventEmitter {
     private taskStore: TaskStore | null = null;
     private taskQueue: TaskMessageQueue | null = null;
     private readonly mcpResponseTimeoutMs = parseInt(process.env.CLAUDE_CLIENT_MCP_TIMEOUT_MS || '2000');
-    
+
     // Message queue for when Claude is busy
     private _messageQueue: string[] = [];
     private _isProcessingMessage = false;
+
+    // Print mode tracking
+    private _printModeFirstMessage = true;
 
     constructor(config: ClaudeClientConfig) {
         super();
@@ -297,6 +304,11 @@ export class ClaudeClient extends EventEmitter {
         }
         this.taskStore = config.taskStore || null;
         this.taskQueue = config.taskQueue || null;
+
+        // In print mode, auto-generate session ID if not provided
+        if (config.printMode && config.printModeAutoSession !== false && !config.sessionId) {
+            this._sessionId = randomUUID();
+        }
     }
 
     private logDebug(message: string): void {
@@ -375,6 +387,15 @@ export class ClaudeClient extends EventEmitter {
      * Start the Claude CLI process
      */
     async start(): Promise<void> {
+        // In print mode, we don't start a persistent process
+        // Instead, each sendMessage() spawns its own process
+        if (this.config.printMode) {
+            this.logDebug('Print mode enabled - will spawn process per message');
+            this.readyEmitted = true;
+            this.emit('ready');
+            return;
+        }
+
         return new Promise((resolve, reject) => {
             try {
                 const claudePath = this.config.claudePath || 'claude';
@@ -569,15 +590,8 @@ export class ClaudeClient extends EventEmitter {
                     this.emit('exit', code);
                     this.logDebug(`Process exited with code: ${code}`);
                     this.process = null;
-                    this.stdinReady = false;
                     this.readyEmitted = false;
                 });
-
-                this.process.stdin.on('drain', () => {
-                    this.stdinReady = true;
-                });
-                
-                this.stdinReady = true;
 
                 // Emit ready after spawn so callers can proceed even if
                 // system/init is delayed or not emitted until first input.
@@ -587,8 +601,8 @@ export class ClaudeClient extends EventEmitter {
                         this.emit('ready');
                     }
                 }, 100);
-                
-                // We consider it started once the process is spawned, 
+
+                // We consider it started once the process is spawned,
                 // but 'ready' event implies system init is done.
                 resolve();
 
@@ -599,9 +613,14 @@ export class ClaudeClient extends EventEmitter {
     }
 
     async sendMessage(text: string): Promise<void> {
+        // In print mode, spawn a new process for each message
+        if (this.config.printMode) {
+            return this.sendMessagePrintMode(text);
+        }
+
         this._isProcessingMessage = true;
         this.setStatus('running');
-        
+
         const message = {
             type: 'user',
             session_id: this._sessionId || this.config.sessionId || 'pending',
@@ -616,21 +635,215 @@ export class ClaudeClient extends EventEmitter {
     }
 
     /**
+     * Send a message in print mode (spawns new process)
+     */
+    private async sendMessagePrintMode(text: string): Promise<void> {
+        this._isProcessingMessage = true;
+        this.setStatus('running');
+
+        const isFirstMessage = this._printModeFirstMessage;
+        this._printModeFirstMessage = false;
+
+        return new Promise((resolve, reject) => {
+            try {
+                const claudePath = this.config.claudePath || 'claude';
+                const args = this.buildPrintModeArgs(isFirstMessage, text);
+
+                this.logDebug(`Print mode spawning: ${claudePath} ${args.join(' ')}`);
+
+                this.process = spawn(claudePath, args, {
+                    cwd: this.config.cwd,
+                    env: {
+                        ...process.env,
+                        ...this.config.env,
+                        CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
+                        ...(this.config.enableFileCheckpointing ? { CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: 'true' } : {}),
+                        CI: 'true',
+                    },
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                    windowsHide: true
+                });
+
+                if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
+                    throw new Error('Failed to create process pipes');
+                }
+
+                // Handle stdout (JSON stream)
+                const rl = createInterface({
+                    input: this.process.stdout,
+                    crlfDelay: Infinity
+                });
+
+                rl.on('line', (line) => this.processLine(line));
+
+                // Handle stderr (logs/errors)
+                this.process.stderr.on('data', (data) => {
+                    const str = data.toString();
+                    this.logDebug(`Stderr: ${str}`);
+                });
+
+                this.process.on('error', (err) => {
+                    this.emit('error', err);
+                    this.logDebug(`Process error: ${err.message}`);
+                    this._isProcessingMessage = false;
+                    reject(err);
+                });
+
+                this.process.on('exit', (code) => {
+                    this.emit('exit', code);
+                    this.logDebug(`Process exited with code: ${code}`);
+                    this.process = null;
+
+                    // In print mode, process exit means message is complete
+                    // Status will be set by result message handler
+                    this._isProcessingMessage = false;
+
+                    if (code === 0) {
+                        resolve();
+                    } else {
+                        // Don't reject if we got a result (non-zero exit might still have valid output)
+                        resolve();
+                    }
+                });
+
+            } catch (error) {
+                this._isProcessingMessage = false;
+                reject(error);
+            }
+        });
+    }
+
+    /**
+     * Build command line arguments for print mode
+     */
+    private buildPrintModeArgs(isFirstMessage: boolean, text: string): string[] {
+        const args: string[] = [];
+
+        // Print mode flag
+        args.push('-p');
+
+        // Output format for streaming
+        args.push('--output-format', 'stream-json');
+        args.push('--verbose');
+
+        // Include partial messages for streaming
+        if (this.config.includePartialMessages !== false) {
+            args.push('--include-partial-messages');
+        }
+
+        // Session handling for multi-turn
+        if (this._sessionId) {
+            if (isFirstMessage) {
+                args.push('--session-id', this._sessionId);
+            } else {
+                args.push('--resume', this._sessionId);
+            }
+        }
+
+        // Permission handling
+        if (this.config.permissionPromptToolName) {
+            args.push('--permission-prompt-tool', this.config.permissionPromptToolName);
+        } else if (this.config.permissionPromptTool !== false) {
+            args.push('--permission-prompt-tool', 'stdio');
+            // In print mode with stdio, we need input-format for control responses
+            args.push('--input-format', 'stream-json');
+        }
+
+        // Model
+        if (this.config.model) {
+            args.push('--model', this.config.model);
+        }
+
+        // Fallback model
+        if (this.config.fallbackModel) {
+            args.push('--fallback-model', this.config.fallbackModel);
+        }
+
+        // Agent
+        if (this.config.agent) {
+            args.push('--agent', this.config.agent);
+        }
+
+        // Max turns
+        if (this.config.maxTurns && this.config.maxTurns > 0) {
+            args.push('--max-turns', this.config.maxTurns.toString());
+        }
+
+        // Max budget
+        if (this.config.maxBudgetUsd !== undefined) {
+            args.push('--max-budget-usd', this.config.maxBudgetUsd.toString());
+        }
+
+        // Permission mode
+        if (this.config.permissionMode) {
+            args.push('--permission-mode', this.config.permissionMode);
+        }
+
+        // Allow dangerously skip permissions
+        if (this.config.allowDangerouslySkipPermissions) {
+            args.push('--allow-dangerously-skip-permissions');
+        }
+
+        // Allowed tools
+        if (this.config.allowedTools && this.config.allowedTools.length > 0) {
+            args.push('--allowedTools', this.config.allowedTools.join(','));
+        }
+
+        // Disallowed tools
+        if (this.config.disallowedTools && this.config.disallowedTools.length > 0) {
+            args.push('--disallowedTools', this.config.disallowedTools.join(','));
+        }
+
+        // Tools
+        if (this.config.tools !== undefined) {
+            if (Array.isArray(this.config.tools)) {
+                args.push('--tools', this.config.tools.length === 0 ? '' : this.config.tools.join(','));
+            } else {
+                args.push('--tools', 'default');
+            }
+        }
+
+        // MCP servers
+        if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
+            args.push('--mcp-config', JSON.stringify({ mcpServers: this.config.mcpServers }));
+        }
+
+        // Additional directories
+        if (this.config.additionalDirectories && this.config.additionalDirectories.length > 0) {
+            for (const dir of this.config.additionalDirectories) {
+                args.push('--add-dir', dir);
+            }
+        }
+
+        // Session persistence
+        if (this.config.persistSession === false) {
+            args.push('--no-session-persistence');
+        }
+
+        // Fork session
+        if (this.config.forkSession) {
+            args.push('--fork-session');
+        }
+
+        // Extra args from config
+        if (this.config.args) {
+            args.push(...this.config.args);
+        }
+
+        // The prompt text (last argument)
+        args.push(text);
+
+        return args;
+    }
+
+    /**
      * Send a control response (permission decision, answer, etc.)
      */
     async sendControlResponse(requestId: string, responseData: ControlResponseData): Promise<void> {
         this.logDebug(`Sending control_response: request_id=${requestId} behavior=${responseData.behavior} scope=${(responseData as any).scope || 'none'}`);
-        const message: ControlResponseMessage = {
-            type: 'control_response',
-            request_id: requestId,
-            subtype: 'success', // Assuming success for now
-            response: responseData
-        };
-        
-        // Wrap in the outer structure expected by CLI if needed, 
-        // based on plugin implementation:
-        // plugin sends: { type: 'control_response', response: { ... } }
-        
+
+        // Wrap in the outer structure expected by CLI:
+        // { type: 'control_response', response: { ... } }
         await this.writeToStdin({
             type: 'control_response',
             response: {
@@ -998,7 +1211,6 @@ export class ClaudeClient extends EventEmitter {
                     this.emit('text_delta', delta.text);  // Delta for backwards compat
                     this.emit('text_accumulated', this._accumulatedText);  // Full accumulated
                 } else if (delta.type === 'thinking_delta' && delta.thinking) {
-                    this._isThinking = true;
                     this._accumulatedThinking += delta.thinking;
                     this.emit('thinking_delta', delta.thinking);  // Delta for backwards compat
                     this.emit('thinking_accumulated', this._accumulatedThinking);  // Full accumulated
@@ -1032,7 +1244,7 @@ export class ClaudeClient extends EventEmitter {
                     } catch (e) {
                         this.logDebug(`Failed to parse tool input JSON: ${this._currentToolBlock.inputJson}`);
                     }
-                    
+
                     this.emit('tool_use_start', {
                         id: this._currentToolBlock.id,
                         name: this._currentToolBlock.name,
@@ -1040,8 +1252,6 @@ export class ClaudeClient extends EventEmitter {
                     });
                     this._currentToolBlock = null;
                 }
-                break;
-
                 break;
 
             case 'message_delta':

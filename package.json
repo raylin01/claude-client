@@ -1,6 +1,6 @@
 {
   "name": "@raylin01/claude-client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Node.js client for controlling Claude Code CLI via stream-json protocol.",
   "license": "ISC",
   "author": "Ray Lin",
