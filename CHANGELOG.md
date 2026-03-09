@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Added a new structured client layer via `ClaudeClient.init(...)`
+- Added `TurnHandle`-based streaming with `updates()`, `current()`, `done`, and per-turn history
+- Added structured open request handling for questions, tool approvals, hooks, and MCP requests
+- Added high-level request helpers: `approveRequest`, `denyRequest`, and `answerQuestion`
+- Added structured examples and updated the README to document when to use raw `client.on(...)` versus structured turns
+- Added real Claude validation scripts for structured smoke tests and multi-pass live validation
+- Expanded test coverage for the structured client surface while preserving the raw event API
+
 ## 0.2.0
 
 - **New Feature**: Print mode (`printMode: true`) - spawns process per message with session persistence via `--session-id`/`--resume`

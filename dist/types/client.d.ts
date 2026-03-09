@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 import { SystemMessage, Usage, AssistantMessage, UserMessage, ControlRequestMessage, ResultMessage, StreamEventMessage, ControlResponseData, ControlCancelRequestMessage, McpMessageEvent, HookCallbackEvent, ControlResponseEnvelope, TaskMessageEvent, ClaudeSupportedModelsResponse } from './types.js';
 import type { TaskStore } from './task-store.js';
 import type { TaskMessageQueue } from './task-queue.js';
+import type { StructuredClaudeClient } from './structured.js';
+export type ClaudePermissionMode = 'acceptEdits' | 'bypassPermissions' | 'default' | 'dontAsk' | 'plan';
 export interface ClaudeClientConfig {
     /**
      * Working directory for the Claude CLI
@@ -27,6 +29,18 @@ export interface ClaudeClientConfig {
      * Enable debug logging
      */
     debug?: boolean;
+    /**
+     * Enable CLI debug mode; string value is passed as a filter.
+     */
+    debugMode?: boolean | string;
+    /**
+     * Write CLI debug logs to file (passes --debug-file)
+     */
+    debugFile?: string;
+    /**
+     * Override verbose mode (passes --verbose). Defaults to true.
+     */
+    verbose?: boolean;
     /**
      * Optional debug logger callback.
      */
@@ -102,11 +116,15 @@ export interface ClaudeClientConfig {
     /**
      * Permission mode (passes --permission-mode)
      */
-    permissionMode?: 'default' | 'acceptEdits';
+    permissionMode?: ClaudePermissionMode;
     /**
      * Allow skipping permissions dangerously (passes --allow-dangerously-skip-permissions)
      */
     allowDangerouslySkipPermissions?: boolean;
+    /**
+     * Bypass all permission checks (passes --dangerously-skip-permissions)
+     */
+    dangerouslySkipPermissions?: boolean;
     /**
      * Allowed tools list (passes --allowedTools)
      */
@@ -124,6 +142,10 @@ export interface ClaudeClientConfig {
      */
     mcpServers?: Record<string, any>;
     /**
+     * Enable deprecated MCP debug mode (passes --mcp-debug)
+     */
+    mcpDebug?: boolean;
+    /**
      * Strict MCP config (passes --strict-mcp-config)
      */
     strictMcpConfig?: boolean;
@@ -135,6 +157,66 @@ export interface ClaudeClientConfig {
      * Additional directories (passes --add-dir)
      */
     additionalDirectories?: string[];
+    /**
+     * File resources to download at startup (passes --file)
+     */
+    files?: string[];
+    /**
+     * Create a new git worktree for this session (passes --worktree [name])
+     */
+    worktree?: boolean | string;
+    /**
+     * Create a tmux session for worktree mode (passes --tmux / --tmux=<mode>)
+     */
+    tmux?: boolean | string;
+    /**
+     * Enable/disable Claude in Chrome integration (passes --chrome / --no-chrome)
+     */
+    chrome?: boolean;
+    /**
+     * Auto-connect to IDE when exactly one is available (passes --ide)
+     */
+    ide?: boolean;
+    /**
+     * Disable all slash commands (passes --disable-slash-commands)
+     */
+    disableSlashCommands?: boolean;
+    /**
+     * Effort level (passes --effort)
+     */
+    effort?: 'low' | 'medium' | 'high';
+    /**
+     * Resume a session linked to a PR (passes --from-pr [value])
+     */
+    fromPr?: boolean | string;
+    /**
+     * System prompt override (passes --system-prompt)
+     */
+    systemPrompt?: string;
+    /**
+     * Append system prompt (passes --append-system-prompt)
+     */
+    appendSystemPrompt?: string;
+    /**
+     * Custom agents JSON (passes --agents)
+     */
+    agents?: Record<string, any> | string;
+    /**
+     * Print mode output format (passes --output-format)
+     */
+    outputFormat?: 'text' | 'json' | 'stream-json';
+    /**
+     * Print mode input format (passes --input-format)
+     */
+    inputFormat?: 'text' | 'stream-json';
+    /**
+     * Re-emit user messages in stream-json mode (passes --replay-user-messages)
+     */
+    replayUserMessages?: boolean;
+    /**
+     * Path or JSON string for settings (passes --settings)
+     */
+    settings?: Record<string, any> | string;
     /**
      * Plugins to load (passes --plugin-dir)
      */
@@ -252,6 +334,7 @@ export declare class ClaudeClient extends EventEmitter {
     private _isProcessingMessage;
     private _printModeFirstMessage;
     constructor(config: ClaudeClientConfig);
+    static init(config: ClaudeClientConfig): Promise<StructuredClaudeClient>;
     private logDebug;
     get sessionId(): string | null;
     /**
@@ -303,7 +386,7 @@ export declare class ClaudeClient extends EventEmitter {
     /**
      * Set permission mode (default or acceptEdits)
      */
-    setPermissionMode(mode: 'default' | 'acceptEdits'): Promise<void>;
+    setPermissionMode(mode: ClaudePermissionMode): Promise<void>;
     /**
      * Set model for the session
      */

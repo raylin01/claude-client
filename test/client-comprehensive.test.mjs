@@ -746,6 +746,93 @@ test('buildPrintModeArgs includes model when specified', () => {
   assert.equal(args[modelIndex + 1], 'claude-sonnet');
 });
 
+test('buildPrintModeArgs includes --worktree when enabled', () => {
+  const client = new ClaudeClient({
+    cwd: process.cwd(),
+    printMode: true,
+    worktree: true
+  });
+
+  const args = client.buildPrintModeArgs(true, 'hello');
+
+  assert.ok(args.includes('--worktree'));
+});
+
+test('buildPrintModeArgs includes named worktree value', () => {
+  const client = new ClaudeClient({
+    cwd: process.cwd(),
+    printMode: true,
+    worktree: 'feature-123'
+  });
+
+  const args = client.buildPrintModeArgs(true, 'hello');
+  const worktreeIndex = args.indexOf('--worktree');
+  assert.ok(worktreeIndex !== -1);
+  assert.equal(args[worktreeIndex + 1], 'feature-123');
+});
+
+test('buildPrintModeArgs includes --tmux when enabled', () => {
+  const client = new ClaudeClient({
+    cwd: process.cwd(),
+    printMode: true,
+    tmux: true
+  });
+
+  const args = client.buildPrintModeArgs(true, 'hello');
+  assert.ok(args.includes('--tmux'));
+});
+
+test('buildPrintModeArgs includes --tmux=classic when configured', () => {
+  const client = new ClaudeClient({
+    cwd: process.cwd(),
+    printMode: true,
+    tmux: 'classic'
+  });
+
+  const args = client.buildPrintModeArgs(true, 'hello');
+  assert.ok(args.includes('--tmux=classic'));
+});
+
+test('buildPrintModeArgs includes dangerously-skip-permissions when enabled', () => {
+  const client = new ClaudeClient({
+    cwd: process.cwd(),
+    printMode: true,
+    dangerouslySkipPermissions: true
+  });
+
+  const args = client.buildPrintModeArgs(true, 'hello');
+  assert.ok(args.includes('--dangerously-skip-permissions'));
+});
+
+test('buildPrintModeArgs includes system and append system prompt', () => {
+  const client = new ClaudeClient({
+    cwd: process.cwd(),
+    printMode: true,
+    systemPrompt: 'System A',
+    appendSystemPrompt: 'System B'
+  });
+
+  const args = client.buildPrintModeArgs(true, 'hello');
+  const systemIndex = args.indexOf('--system-prompt');
+  const appendIndex = args.indexOf('--append-system-prompt');
+  assert.ok(systemIndex !== -1);
+  assert.ok(appendIndex !== -1);
+  assert.equal(args[systemIndex + 1], 'System A');
+  assert.equal(args[appendIndex + 1], 'System B');
+});
+
+test('buildPrintModeArgs supports --from-pr when no managed session', () => {
+  const client = new ClaudeClient({
+    cwd: process.cwd(),
+    printMode: true,
+    printModeAutoSession: false,
+    fromPr: true
+  });
+
+  const args = client.buildPrintModeArgs(true, 'hello');
+  assert.ok(args.includes('--from-pr'));
+});
+
 test('buildPrintModeArgs includes MCP servers config', () => {
   const client = new ClaudeClient({
     cwd: process.cwd(),
@@ -788,4 +875,3 @@ test('print mode tracks first message state', async () => {
   // After simulating one message cycle, it should be false
   // (We can't easily test actual sendMessage without spawning real process)
 });
-

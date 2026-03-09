@@ -1,6 +1,6 @@
 {
   "name": "@raylin01/claude-client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Node.js client for controlling Claude Code CLI via stream-json protocol.",
   "license": "ISC",
   "author": "Ray Lin",
@@ -72,6 +72,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/**/*.test.mjs",
     "test:coverage": "npm run build && node --test --experimental-test-coverage test/**/*.test.mjs",
+    "integration:worktree": "npm run build && node ./scripts/integration-worktree-smoke.mjs",
+    "integration:tmux": "npm run build && node ./scripts/integration-tmux-smoke.mjs",
+    "integration:structured": "npm run build && node ./scripts/integration-structured-smoke.mjs",
+    "integration:structured-multipass": "npm run build && node ./scripts/integration-structured-multipass.mjs",
+    "integration": "npm run integration:worktree && npm run integration:tmux",
     "prepack": "npm run build"
   },
   "devDependencies": {

@@ -163,7 +163,7 @@ export interface McpMessageRequest {
 }
 export interface SetPermissionModeRequest {
     subtype: 'set_permission_mode';
-    mode: 'default' | 'acceptEdits';
+    mode: 'acceptEdits' | 'bypassPermissions' | 'default' | 'dontAsk' | 'plan';
 }
 export interface SetModelRequest {
     subtype: 'set_model';

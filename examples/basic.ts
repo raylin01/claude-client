@@ -1,12 +1,18 @@
 import { ClaudeClient } from '@raylin01/claude-client';
 
-const client = new ClaudeClient({ cwd: process.cwd() });
-
-client.on('ready', () => {
-  void client.sendMessage('Hello Claude. Give me a short intro.');
+const client = await ClaudeClient.init({
+  cwd: process.cwd(),
+  includePartialMessages: true
 });
 
-client.on('text_delta', (delta) => process.stdout.write(delta));
-client.on('result', () => process.stdout.write('\n'));
+const turn = client.send('Hello Claude. Give me a short intro.');
 
-await client.start();
+for await (const update of turn.updates()) {
+  if (update.kind === 'output' && update.snapshot.currentOutputKind === 'text') {
+    process.stdout.write(`\r${update.snapshot.text}`);
+  }
+}
+
+const finalSnapshot = await turn.done;
+process.stdout.write(`\n\nFinal result: ${finalSnapshot.result?.subtype || 'unknown'}\n`);
+client.close();

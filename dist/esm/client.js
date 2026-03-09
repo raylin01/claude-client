@@ -40,6 +40,10 @@ export class ClaudeClient extends EventEmitter {
             this._sessionId = randomUUID();
         }
     }
+    static async init(config) {
+        const module = await import('./structured.js');
+        return module.StructuredClaudeClient.init(config);
+    }
     logDebug(message) {
         if (!this.config.debug)
             return;
@@ -120,14 +124,28 @@ export class ClaudeClient extends EventEmitter {
             try {
                 const claudePath = this.config.claudePath || 'claude';
                 const args = [
-                    '--output-format', 'stream-json',
-                    '--verbose',
-                    '--input-format', 'stream-json',
+                    '--output-format', this.config.outputFormat || 'stream-json',
+                    '--input-format', this.config.inputFormat || 'stream-json',
                     ...(this.config.args || [])
                 ];
+                if (this.config.verbose !== false) {
+                    args.push('--verbose');
+                }
                 const includePartial = this.config.includePartialMessages !== false;
                 if (includePartial) {
                     args.push('--include-partial-messages');
+                }
+                if (this.config.debugMode !== undefined) {
+                    args.push('--debug');
+                    if (typeof this.config.debugMode === 'string' && this.config.debugMode.trim()) {
+                        args.push(this.config.debugMode.trim());
+                    }
+                }
+                if (this.config.debugFile) {
+                    args.push('--debug-file', this.config.debugFile);
+                }
+                if (this.config.mcpDebug) {
+                    args.push('--mcp-debug');
                 }
                 if (this.config.permissionPromptToolName) {
                     args.push('--permission-prompt-tool', this.config.permissionPromptToolName);
@@ -149,6 +167,14 @@ export class ClaudeClient extends EventEmitter {
                 }
                 if (this.config.resumeSessionId) {
                     args.push('--resume', this.config.resumeSessionId);
+                }
+                if (this.config.fromPr !== undefined) {
+                    if (typeof this.config.fromPr === 'string' && this.config.fromPr.trim()) {
+                        args.push('--from-pr', this.config.fromPr.trim());
+                    }
+                    else if (this.config.fromPr === true) {
+                        args.push('--from-pr');
+                    }
                 }
                 if (this.config.maxTurns && this.config.maxTurns > 0) {
                     args.push('--max-turns', this.config.maxTurns.toString());
@@ -177,10 +203,22 @@ export class ClaudeClient extends EventEmitter {
                         : JSON.stringify(this.config.jsonSchema);
                     args.push('--json-schema', schemaValue);
                 }
+                if (this.config.systemPrompt) {
+                    args.push('--system-prompt', this.config.systemPrompt);
+                }
+                if (this.config.appendSystemPrompt) {
+                    args.push('--append-system-prompt', this.config.appendSystemPrompt);
+                }
+                if (this.config.effort) {
+                    args.push('--effort', this.config.effort);
+                }
                 if (this.config.permissionMode) {
                     args.push('--permission-mode', this.config.permissionMode);
                 }
-                if (this.config.allowDangerouslySkipPermissions) {
+                if (this.config.dangerouslySkipPermissions) {
+                    args.push('--dangerously-skip-permissions');
+                }
+                else if (this.config.allowDangerouslySkipPermissions) {
                     args.push('--allow-dangerously-skip-permissions');
                 }
                 if (this.config.allowedTools && this.config.allowedTools.length > 0) {
@@ -206,10 +244,49 @@ export class ClaudeClient extends EventEmitter {
                 if (this.config.strictMcpConfig) {
                     args.push('--strict-mcp-config');
                 }
+                if (this.config.ide) {
+                    args.push('--ide');
+                }
+                if (this.config.disableSlashCommands) {
+                    args.push('--disable-slash-commands');
+                }
+                if (this.config.chrome === true) {
+                    args.push('--chrome');
+                }
+                else if (this.config.chrome === false) {
+                    args.push('--no-chrome');
+                }
                 if (this.config.additionalDirectories && this.config.additionalDirectories.length > 0) {
                     for (const dir of this.config.additionalDirectories) {
                         args.push('--add-dir', dir);
                     }
+                }
+                if (this.config.files && this.config.files.length > 0) {
+                    args.push('--file', ...this.config.files);
+                }
+                if (typeof this.config.worktree === 'string') {
+                    const worktreeName = this.config.worktree.trim();
+                    if (worktreeName) {
+                        args.push('--worktree', worktreeName);
+                    }
+                }
+                else if (this.config.worktree === true) {
+                    args.push('--worktree');
+                }
+                if (typeof this.config.tmux === 'string') {
+                    const tmuxMode = this.config.tmux.trim();
+                    if (tmuxMode) {
+                        args.push(`--tmux=${tmuxMode}`);
+                    }
+                }
+                else if (this.config.tmux === true) {
+                    args.push('--tmux');
+                }
+                if (this.config.agents) {
+                    const agentsValue = typeof this.config.agents === 'string'
+                        ? this.config.agents
+                        : JSON.stringify(this.config.agents);
+                    args.push('--agents', agentsValue);
                 }
                 if (this.config.plugins && this.config.plugins.length > 0) {
                     for (const plugin of this.config.plugins) {
@@ -226,6 +303,11 @@ export class ClaudeClient extends EventEmitter {
                     args.push('--resume-session-at', this.config.resumeSessionAt);
                 }
                 const extraArgs = { ...(this.config.extraArgs || {}) };
+                if (this.config.settings !== undefined && extraArgs.settings === undefined) {
+                    extraArgs.settings = typeof this.config.settings === 'string'
+                        ? this.config.settings
+                        : JSON.stringify(this.config.settings);
+                }
                 if (this.config.sandbox) {
                     let settingsObj = { sandbox: this.config.sandbox };
                     if (extraArgs.settings) {
@@ -351,8 +433,13 @@ export class ClaudeClient extends EventEmitter {
             try {
                 const claudePath = this.config.claudePath || 'claude';
                 const args = this.buildPrintModeArgs(isFirstMessage, text);
-                this.logDebug(`Print mode spawning: ${claudePath} ${args.join(' ')}`);
-                this.process = spawn(claudePath, args, {
+                const isScript = /\.(js|mjs|cjs|ts|tsx|jsx)$/.test(claudePath);
+                const spawnBin = isScript ? (this.config.executable || 'node') : claudePath;
+                const spawnArgs = isScript
+                    ? [...(this.config.executableArgs || []), claudePath, ...args]
+                    : args;
+                this.logDebug(`Print mode spawning: ${spawnBin} ${spawnArgs.join(' ')}`);
+                this.process = spawn(spawnBin, spawnArgs, {
                     cwd: this.config.cwd,
                     env: {
                         ...process.env,
@@ -413,14 +500,29 @@ export class ClaudeClient extends EventEmitter {
         const args = [];
         // Print mode flag
         args.push('-p');
-        // Output format for streaming
-        args.push('--output-format', 'stream-json');
-        args.push('--verbose');
-        // Include partial messages for streaming
-        if (this.config.includePartialMessages !== false) {
+        // Output format and verbosity
+        const outputFormat = this.config.outputFormat || 'stream-json';
+        args.push('--output-format', outputFormat);
+        if (this.config.verbose !== false) {
+            args.push('--verbose');
+        }
+        // Include partial messages when streaming output
+        if (outputFormat === 'stream-json' && this.config.includePartialMessages !== false) {
             args.push('--include-partial-messages');
         }
-        // Session handling for multi-turn
+        if (this.config.debugMode !== undefined) {
+            args.push('--debug');
+            if (typeof this.config.debugMode === 'string' && this.config.debugMode.trim()) {
+                args.push(this.config.debugMode.trim());
+            }
+        }
+        if (this.config.debugFile) {
+            args.push('--debug-file', this.config.debugFile);
+        }
+        if (this.config.mcpDebug) {
+            args.push('--mcp-debug');
+        }
+        // Session handling for managed print-mode sessions
         if (this._sessionId) {
             if (isFirstMessage) {
                 args.push('--session-id', this._sessionId);
@@ -429,14 +531,35 @@ export class ClaudeClient extends EventEmitter {
                 args.push('--resume', this._sessionId);
             }
         }
-        // Permission handling
+        else {
+            if (this.config.continueConversation) {
+                args.push('--continue');
+            }
+            if (this.config.resumeSessionId) {
+                args.push('--resume', this.config.resumeSessionId);
+            }
+            if (this.config.fromPr !== undefined) {
+                if (typeof this.config.fromPr === 'string' && this.config.fromPr.trim()) {
+                    args.push('--from-pr', this.config.fromPr.trim());
+                }
+                else if (this.config.fromPr === true) {
+                    args.push('--from-pr');
+                }
+            }
+        }
+        // Permission handling and input format
         if (this.config.permissionPromptToolName) {
             args.push('--permission-prompt-tool', this.config.permissionPromptToolName);
         }
         else if (this.config.permissionPromptTool !== false) {
             args.push('--permission-prompt-tool', 'stdio');
-            // In print mode with stdio, we need input-format for control responses
-            args.push('--input-format', 'stream-json');
+        }
+        const inputFormat = this.config.inputFormat || (this.config.permissionPromptTool !== false ? 'stream-json' : undefined);
+        if (inputFormat) {
+            args.push('--input-format', inputFormat);
+        }
+        if (this.config.replayUserMessages) {
+            args.push('--replay-user-messages');
         }
         // Model
         if (this.config.model) {
@@ -450,6 +573,24 @@ export class ClaudeClient extends EventEmitter {
         if (this.config.agent) {
             args.push('--agent', this.config.agent);
         }
+        if (this.config.betas && this.config.betas.length > 0) {
+            args.push('--betas', this.config.betas.join(','));
+        }
+        if (this.config.jsonSchema) {
+            const schemaValue = typeof this.config.jsonSchema === 'string'
+                ? this.config.jsonSchema
+                : JSON.stringify(this.config.jsonSchema);
+            args.push('--json-schema', schemaValue);
+        }
+        if (this.config.systemPrompt) {
+            args.push('--system-prompt', this.config.systemPrompt);
+        }
+        if (this.config.appendSystemPrompt) {
+            args.push('--append-system-prompt', this.config.appendSystemPrompt);
+        }
+        if (this.config.effort) {
+            args.push('--effort', this.config.effort);
+        }
         // Max turns
         if (this.config.maxTurns && this.config.maxTurns > 0) {
             args.push('--max-turns', this.config.maxTurns.toString());
@@ -462,8 +603,11 @@ export class ClaudeClient extends EventEmitter {
         if (this.config.permissionMode) {
             args.push('--permission-mode', this.config.permissionMode);
         }
-        // Allow dangerously skip permissions
-        if (this.config.allowDangerouslySkipPermissions) {
+        // Permission bypass options
+        if (this.config.dangerouslySkipPermissions) {
+            args.push('--dangerously-skip-permissions');
+        }
+        else if (this.config.allowDangerouslySkipPermissions) {
             args.push('--allow-dangerously-skip-permissions');
         }
         // Allowed tools
@@ -487,11 +631,57 @@ export class ClaudeClient extends EventEmitter {
         if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
             args.push('--mcp-config', JSON.stringify({ mcpServers: this.config.mcpServers }));
         }
+        if (this.config.settingSources && this.config.settingSources.length > 0) {
+            args.push('--setting-sources', this.config.settingSources.join(','));
+        }
+        if (this.config.strictMcpConfig) {
+            args.push('--strict-mcp-config');
+        }
+        if (this.config.ide) {
+            args.push('--ide');
+        }
+        if (this.config.disableSlashCommands) {
+            args.push('--disable-slash-commands');
+        }
+        if (this.config.chrome === true) {
+            args.push('--chrome');
+        }
+        else if (this.config.chrome === false) {
+            args.push('--no-chrome');
+        }
         // Additional directories
         if (this.config.additionalDirectories && this.config.additionalDirectories.length > 0) {
             for (const dir of this.config.additionalDirectories) {
                 args.push('--add-dir', dir);
             }
+        }
+        if (this.config.files && this.config.files.length > 0) {
+            args.push('--file', ...this.config.files);
+        }
+        // Worktree support
+        if (typeof this.config.worktree === 'string') {
+            const worktreeName = this.config.worktree.trim();
+            if (worktreeName) {
+                args.push('--worktree', worktreeName);
+            }
+        }
+        else if (this.config.worktree === true) {
+            args.push('--worktree');
+        }
+        if (typeof this.config.tmux === 'string') {
+            const tmuxMode = this.config.tmux.trim();
+            if (tmuxMode) {
+                args.push(`--tmux=${tmuxMode}`);
+            }
+        }
+        else if (this.config.tmux === true) {
+            args.push('--tmux');
+        }
+        if (this.config.agents) {
+            const agentsValue = typeof this.config.agents === 'string'
+                ? this.config.agents
+                : JSON.stringify(this.config.agents);
+            args.push('--agents', agentsValue);
         }
         // Session persistence
         if (this.config.persistSession === false) {
@@ -500,6 +690,44 @@ export class ClaudeClient extends EventEmitter {
         // Fork session
         if (this.config.forkSession) {
             args.push('--fork-session');
+        }
+        if (this.config.resumeSessionAt) {
+            args.push('--resume-session-at', this.config.resumeSessionAt);
+        }
+        const extraArgs = { ...(this.config.extraArgs || {}) };
+        if (this.config.settings !== undefined && extraArgs.settings === undefined) {
+            extraArgs.settings = typeof this.config.settings === 'string'
+                ? this.config.settings
+                : JSON.stringify(this.config.settings);
+        }
+        if (this.config.sandbox) {
+            let settingsObj = { sandbox: this.config.sandbox };
+            if (extraArgs.settings) {
+                if (typeof extraArgs.settings === 'string') {
+                    try {
+                        settingsObj = { ...JSON.parse(extraArgs.settings), sandbox: this.config.sandbox };
+                    }
+                    catch {
+                        throw new Error('Failed to parse extraArgs.settings JSON while applying sandbox.');
+                    }
+                }
+                else if (typeof extraArgs.settings === 'object') {
+                    settingsObj = { ...extraArgs.settings, sandbox: this.config.sandbox };
+                }
+                else {
+                    throw new Error('extraArgs.settings must be a string or object when sandbox is set.');
+                }
+            }
+            extraArgs.settings = JSON.stringify(settingsObj);
+        }
+        for (const [key, value] of Object.entries(extraArgs)) {
+            if (value === null) {
+                args.push(`--${key}`);
+            }
+            else {
+                const val = typeof value === 'string' ? value : JSON.stringify(value);
+                args.push(`--${key}`, val);
+            }
         }
         // Extra args from config
         if (this.config.args) {
