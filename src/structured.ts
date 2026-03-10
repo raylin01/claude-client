@@ -920,6 +920,25 @@ export class StructuredClaudeClient extends EventEmitter {
             .map((entry) => cloneOpenRequest(entry.request));
     }
 
+    private turnFromRemote(createIfMissing = false): TurnHandle | null {
+        if (this.activeTurn) {
+            return this.activeTurn;
+        }
+
+        if (!createIfMissing) {
+            return null;
+        }
+
+        const handle = new TurnHandle(this, `attached-${++this.turnCounter}`, { text: '' }, {
+            resumed: true,
+            synthetic: true
+        });
+        this.turns.push(handle);
+        this.activeTurn = handle;
+        handle.markStarted();
+        return handle;
+    }
+
     private async startTurn(handle: TurnHandle): Promise<void> {
         this.activeTurn = handle;
         handle.markStarted();
@@ -1069,7 +1088,7 @@ export class StructuredClaudeClient extends EventEmitter {
     }
 
     private handleControlRequest(message: ControlRequestMessage): void {
-        const turn = this.activeTurn;
+        const turn = this.turnFromRemote(true);
         if (!turn) {
             return;
         }

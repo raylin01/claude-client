@@ -177,6 +177,45 @@ test('StructuredClaudeClient answers AskUserQuestion requests', async () => {
   assert.equal(client.getOpenRequests().length, 0);
 });
 
+test('StructuredClaudeClient attaches to an existing waiting turn and answers questions', async () => {
+  const { rawClient, client, controlResponses } = createStructuredClient();
+
+  rawClient.emit('control_request', {
+    type: 'control_request',
+    request_id: 'sdk-question-remote',
+    request: {
+      subtype: 'can_use_tool',
+      tool_name: 'AskUserQuestion',
+      input: {
+        questions: [
+          {
+            header: 'Resume',
+            question: 'Resume the waiting session?',
+            options: ['Yes', 'No']
+          }
+        ]
+      }
+    }
+  });
+
+  const [request] = client.getOpenRequests();
+  assert.equal(request.kind, 'question');
+  assert.equal(client.getCurrentTurn()?.metadata?.synthetic, true);
+  assert.equal(client.getCurrentTurn()?.metadata?.resumed, true);
+
+  await client.answerQuestion(request.id, 'Yes');
+
+  assert.equal(controlResponses.length, 1);
+  assert.equal(controlResponses[0].requestId, 'sdk-question-remote');
+  assert.deepEqual(controlResponses[0].responseData.updatedInput, {
+    question: 'Resume the waiting session?',
+    answers: {
+      Resume: 'Yes'
+    }
+  });
+  assert.equal(client.getOpenRequests().length, 0);
+});
+
 test('StructuredClaudeClient supports incremental question sessions', async () => {
   const { rawClient, client, controlResponses } = createStructuredClient();
 

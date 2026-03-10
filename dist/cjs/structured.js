@@ -612,6 +612,22 @@ class StructuredClaudeClient extends events_1.EventEmitter {
             .filter((entry) => entry.request.turnId === turnId && entry.request.status === 'open')
             .map((entry) => cloneOpenRequest(entry.request));
     }
+    turnFromRemote(createIfMissing = false) {
+        if (this.activeTurn) {
+            return this.activeTurn;
+        }
+        if (!createIfMissing) {
+            return null;
+        }
+        const handle = new TurnHandle(this, `attached-${++this.turnCounter}`, { text: '' }, {
+            resumed: true,
+            synthetic: true
+        });
+        this.turns.push(handle);
+        this.activeTurn = handle;
+        handle.markStarted();
+        return handle;
+    }
     async startTurn(handle) {
         this.activeTurn = handle;
         handle.markStarted();
@@ -743,7 +759,7 @@ class StructuredClaudeClient extends events_1.EventEmitter {
         });
     }
     handleControlRequest(message) {
-        const turn = this.activeTurn;
+        const turn = this.turnFromRemote(true);
         if (!turn) {
             return;
         }

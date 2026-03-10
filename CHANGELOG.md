@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3
+
+- Added synthetic attached-turn handling so structured Claude clients can take over resumed waiting `control_request` prompts.
+- Added regression coverage for answering provider-originated question requests without a locally started turn.
+
 ## 0.3.2
 
 - Added shared provider-neutral session browser types for raw plus normalized transcript access.

@@ -215,6 +215,7 @@ export declare class StructuredClaudeClient extends EventEmitter {
     listSupportedModels(timeoutMs?: number): Promise<import("./types.js").ClaudeSupportedModelsResponse>;
     close(): void;
     getOpenRequestsForTurn(turnId: string): OpenRequest[];
+    private turnFromRemote;
     private startTurn;
     private drainPendingTurns;
     private attachRawEventHandlers;
