@@ -11,8 +11,14 @@ import { EventEmitter } from 'events';
 // ============================================================================
 // Session Discovery Service
 // ============================================================================
-const CLAUDE_DIR = join(homedir(), '.claude');
-const PROJECTS_DIR = join(CLAUDE_DIR, 'projects');
+function getClaudeDir(options = {}) {
+    if (options.claudeDir)
+        return options.claudeDir;
+    return join(options.homeDir || homedir(), '.claude');
+}
+function getProjectsDir(options = {}) {
+    return join(getClaudeDir(options), 'projects');
+}
 /**
  * Convert project path to escaped directory name
  */
@@ -48,25 +54,26 @@ function deriveProjectPath(storagePath, escapedPath) {
 /**
  * Get the storage path for a project
  */
-export function getProjectStoragePath(projectPath) {
-    return join(PROJECTS_DIR, escapeProjectPath(projectPath));
+export function getProjectStoragePath(projectPath, options = {}) {
+    return join(getProjectsDir(options), escapeProjectPath(projectPath));
 }
 /**
  * List all projects known to Claude Code
  */
-export function listProjects() {
-    if (!existsSync(PROJECTS_DIR)) {
+export function listProjects(options = {}) {
+    const projectsDir = getProjectsDir(options);
+    if (!existsSync(projectsDir)) {
         return [];
     }
     const projects = [];
     try {
-        const dirs = readdirSync(PROJECTS_DIR, { withFileTypes: true });
+        const dirs = readdirSync(projectsDir, { withFileTypes: true });
         for (const dir of dirs) {
             if (!dir.isDirectory())
                 continue;
             if (dir.name === '.' || dir.name === '..')
                 continue;
-            const storagePath = join(PROJECTS_DIR, dir.name);
+            const storagePath = join(projectsDir, dir.name);
             const projectPath = deriveProjectPath(storagePath, dir.name);
             // Get session count
             let sessionCount = 0;
@@ -101,19 +108,20 @@ export function listProjects() {
 /**
  * Async version of listProjects to avoid blocking the event loop
  */
-export async function listProjectsAsync() {
-    if (!existsSync(PROJECTS_DIR)) {
+export async function listProjectsAsync(options = {}) {
+    const projectsDir = getProjectsDir(options);
+    if (!existsSync(projectsDir)) {
         return [];
     }
     const projects = [];
     try {
-        const dirs = await readdir(PROJECTS_DIR, { withFileTypes: true });
+        const dirs = await readdir(projectsDir, { withFileTypes: true });
         for (const dir of dirs) {
             if (!dir.isDirectory())
                 continue;
             if (dir.name === '.' || dir.name === '..')
                 continue;
-            const storagePath = join(PROJECTS_DIR, dir.name);
+            const storagePath = join(projectsDir, dir.name);
             const projectPath = deriveProjectPath(storagePath, dir.name);
             let sessionCount = 0;
             const indexPath = join(storagePath, 'sessions-index.json');
@@ -145,8 +153,8 @@ export async function listProjectsAsync() {
 /**
  * List sessions for a specific project
  */
-export async function listSessions(projectPath) {
-    const storagePath = getProjectStoragePath(projectPath);
+export async function listSessions(projectPath, options = {}) {
+    const storagePath = getProjectStoragePath(projectPath, options);
     const indexPath = join(storagePath, 'sessions-index.json');
     if (!existsSync(indexPath)) {
         return [];
@@ -164,8 +172,8 @@ export async function listSessions(projectPath) {
 /**
  * Get detailed information about a session
  */
-export function getSessionDetails(sessionId, projectPath) {
-    const storagePath = getProjectStoragePath(projectPath);
+export function getSessionDetails(sessionId, projectPath, options = {}) {
+    const storagePath = getProjectStoragePath(projectPath, options);
     const sessionPath = join(storagePath, `${sessionId}.jsonl`);
     if (!existsSync(sessionPath)) {
         return null;
@@ -219,8 +227,8 @@ export function getSessionDetails(sessionId, projectPath) {
 /**
  * Async version of getSessionDetails to avoid blocking the event loop
  */
-export async function getSessionDetailsAsync(sessionId, projectPath) {
-    const storagePath = getProjectStoragePath(projectPath);
+export async function getSessionDetailsAsync(sessionId, projectPath, options = {}) {
+    const storagePath = getProjectStoragePath(projectPath, options);
     const sessionPath = join(storagePath, `${sessionId}.jsonl`);
     if (!existsSync(sessionPath)) {
         return null;
@@ -274,8 +282,8 @@ export async function getSessionDetailsAsync(sessionId, projectPath) {
 /**
  * Get messages from a session since a given timestamp
  */
-export function getMessagesSince(sessionId, projectPath, since) {
-    const details = getSessionDetails(sessionId, projectPath);
+export function getMessagesSince(sessionId, projectPath, since, options = {}) {
+    const details = getSessionDetails(sessionId, projectPath, options);
     if (!details)
         return [];
     return details.messages.filter(msg => {
@@ -283,6 +291,233 @@ export function getMessagesSince(sessionId, projectPath, since) {
             return false;
         return new Date(msg.timestamp) > since;
     });
+}
+function toIsoTimestamp(value) {
+    if (typeof value === 'string') {
+        const parsed = Date.parse(value);
+        if (Number.isFinite(parsed))
+            return new Date(parsed).toISOString();
+    }
+    if (typeof value === 'number') {
+        const ms = value > 1_000_000_000_000 ? value : value * 1000;
+        return new Date(ms).toISOString();
+    }
+    return new Date().toISOString();
+}
+function safeJson(value, maxChars = 1200) {
+    try {
+        const raw = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        return raw.length > maxChars ? `${raw.slice(0, maxChars)}...` : raw;
+    }
+    catch {
+        return String(value);
+    }
+}
+function buildTranscriptMessage(role, createdAt, turnId, itemId, blockIndex, block) {
+    return {
+        id: `${turnId}:${itemId}:${blockIndex}`,
+        role,
+        createdAt,
+        turnId,
+        itemId,
+        content: [block]
+    };
+}
+function extractClaudeTextBlock(block) {
+    if (!block)
+        return null;
+    if (typeof block?.text === 'string' && block.text.trim())
+        return block.text.trim();
+    if (typeof block?.content === 'string' && block.content.trim())
+        return block.content.trim();
+    return null;
+}
+function formatClaudeTodos(todos) {
+    if (!Array.isArray(todos) || todos.length === 0)
+        return null;
+    const lines = todos.slice(0, 20).map((todo) => {
+        const status = typeof todo?.status === 'string' ? todo.status : 'pending';
+        const content = typeof todo?.content === 'string'
+            ? todo.content
+            : (typeof todo?.title === 'string' ? todo.title : 'Untitled');
+        return `- [${status}] ${content}`;
+    });
+    if (todos.length > 20) {
+        lines.push(`- ...and ${todos.length - 20} more`);
+    }
+    return lines.join('\n').trim() || null;
+}
+function extractFirstPrompt(messages) {
+    for (const message of messages) {
+        const content = Array.isArray(message?.message?.content) ? message.message.content : [];
+        for (const block of content) {
+            const text = extractClaudeTextBlock(block);
+            if (text)
+                return text;
+        }
+        if (typeof message?.summary === 'string' && message.summary.trim()) {
+            return message.summary.trim();
+        }
+    }
+    return 'Claude session';
+}
+export function normalizeClaudeSessionMessages(rawMessages) {
+    const messages = [];
+    const resolvedToolUseIds = new Set();
+    const pendingToolUses = new Map();
+    for (const raw of rawMessages) {
+        const content = Array.isArray(raw?.message?.content) ? raw.message.content : [];
+        for (const block of content) {
+            if (block?.type === 'tool_result' && typeof block?.tool_use_id === 'string' && block.tool_use_id.trim()) {
+                resolvedToolUseIds.add(block.tool_use_id);
+            }
+        }
+    }
+    rawMessages.forEach((raw, index) => {
+        const rawType = String(raw?.type || '');
+        if (rawType === 'queue-operation' ||
+            rawType === 'file-history-snapshot' ||
+            raw?.isSnapshotUpdate ||
+            raw?.snapshot) {
+            return;
+        }
+        const role = raw?.message?.role === 'user' || rawType === 'user' ? 'user' : 'assistant';
+        const createdAt = toIsoTimestamp(raw?.timestamp ?? Date.now());
+        const turnId = `claude-${raw?.sessionId || 'session'}`;
+        const itemId = typeof raw?.uuid === 'string' && raw.uuid.trim() ? raw.uuid : `line-${index}`;
+        const blocks = [];
+        if (rawType === 'summary' && typeof raw?.summary === 'string' && raw.summary.trim()) {
+            blocks.push({ type: 'text', text: raw.summary.trim() });
+        }
+        const content = Array.isArray(raw?.message?.content) ? raw.message.content : [];
+        for (const block of content) {
+            const blockType = typeof block?.type === 'string' ? block.type : 'unknown';
+            if (blockType === 'text' || blockType === 'input_text' || blockType === 'output_text' || blockType === 'inputText') {
+                const text = extractClaudeTextBlock(block);
+                if (text)
+                    blocks.push({ type: 'text', text });
+                continue;
+            }
+            if (blockType === 'thinking' && typeof block?.thinking === 'string' && block.thinking.trim()) {
+                blocks.push({ type: 'thinking', thinking: block.thinking.trim() });
+                continue;
+            }
+            if (blockType === 'tool_use') {
+                const toolUseId = typeof block?.id === 'string' && block.id.trim() ? block.id : undefined;
+                const toolName = typeof block?.name === 'string' && block.name.trim() ? block.name : 'ToolUse';
+                blocks.push({
+                    type: 'tool_use',
+                    name: toolName,
+                    input: block?.input,
+                    toolUseId
+                });
+                if (toolUseId && !resolvedToolUseIds.has(toolUseId)) {
+                    pendingToolUses.set(toolUseId, {
+                        turnId,
+                        itemId,
+                        createdAt,
+                        toolName,
+                        input: block?.input,
+                        messageIndex: index
+                    });
+                }
+                continue;
+            }
+            if (blockType === 'tool_result') {
+                const toolUseId = typeof block?.tool_use_id === 'string' && block.tool_use_id.trim()
+                    ? block.tool_use_id
+                    : undefined;
+                blocks.push({
+                    type: 'tool_result',
+                    content: block?.content,
+                    isError: Boolean(block?.is_error),
+                    toolUseId
+                });
+                if (toolUseId)
+                    resolvedToolUseIds.add(toolUseId);
+                continue;
+            }
+            const fallback = safeJson(block, 900).trim();
+            if (fallback) {
+                blocks.push({ type: 'text', text: `[${blockType}] ${fallback}` });
+            }
+        }
+        const todosText = formatClaudeTodos(raw?.todos);
+        if (todosText) {
+            blocks.push({
+                type: 'plan',
+                text: 'Todo List',
+                explanation: todosText
+            });
+        }
+        if (blocks.length === 0 && raw?.toolUseResult != null) {
+            const toolResultText = typeof raw.toolUseResult === 'string'
+                ? raw.toolUseResult
+                : safeJson(raw.toolUseResult, 1200);
+            if (toolResultText.trim()) {
+                blocks.push({
+                    type: 'tool_result',
+                    content: toolResultText,
+                    isError: toolResultText.toLowerCase().includes('error')
+                });
+            }
+        }
+        blocks.forEach((block, blockIndex) => {
+            messages.push(buildTranscriptMessage(role, createdAt, turnId, itemId, blockIndex, block));
+        });
+    });
+    const nearTailIndex = Math.max(0, rawMessages.length - 3);
+    for (const [toolUseId, pending] of pendingToolUses) {
+        if (resolvedToolUseIds.has(toolUseId))
+            continue;
+        if (pending.messageIndex < nearTailIndex)
+            continue;
+        messages.push(buildTranscriptMessage('assistant', pending.createdAt, pending.turnId, `${pending.itemId}-approval`, 0, {
+            type: 'approval_needed',
+            title: 'Tool approval may be required',
+            description: 'This tool use appears unresolved in the saved Claude session.',
+            toolName: pending.toolName,
+            status: 'pending',
+            requiresAttach: true,
+            payload: {
+                toolUseId,
+                input: pending.input
+            }
+        }));
+    }
+    return messages;
+}
+export async function listClaudeSessionSummaries(projectPath, options = {}) {
+    const entries = await listSessions(projectPath, options);
+    return entries.map((entry) => ({
+        provider: 'claude',
+        sessionId: entry.sessionId,
+        title: entry.firstPrompt || 'Claude session',
+        createdAt: toIsoTimestamp(entry.created),
+        updatedAt: toIsoTimestamp(entry.modified),
+        messageCount: entry.messageCount,
+        projectPath: entry.projectPath,
+        gitBranch: entry.gitBranch,
+        raw: entry
+    }));
+}
+export async function readClaudeSessionRecord(sessionId, projectPath, options = {}) {
+    const details = await getSessionDetailsAsync(sessionId, projectPath, options);
+    if (!details)
+        return null;
+    return {
+        provider: 'claude',
+        sessionId: details.sessionId,
+        title: details.summary || extractFirstPrompt(details.messages),
+        createdAt: details.created?.toISOString(),
+        updatedAt: details.modified?.toISOString(),
+        messageCount: details.messageCount,
+        projectPath: details.projectPath,
+        gitBranch: details.gitBranch,
+        raw: details,
+        rawMessages: details.messages,
+        messages: normalizeClaudeSessionMessages(details.messages)
+    };
 }
 /**
  * Watch for session changes with adaptive polling
@@ -444,4 +679,4 @@ export class SessionWatcher extends EventEmitter {
 // ============================================================================
 // Exports
 // ============================================================================
-export { CLAUDE_DIR, PROJECTS_DIR };
+export { getClaudeDir, getProjectsDir };

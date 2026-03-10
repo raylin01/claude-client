@@ -207,6 +207,32 @@ if (request?.kind === 'question') {
 }
 ```
 
+### Session Browser Examples
+
+The package also exposes read-only helpers for browsing Claude Code session history from disk.
+
+```ts
+import {
+  listClaudeSessionSummaries,
+  readClaudeSessionRecord
+} from '@raylin01/claude-client/sessions';
+
+const summaries = await listClaudeSessionSummaries(process.cwd());
+const latest = summaries[0];
+
+if (latest) {
+  console.log('Latest session:', latest.id, latest.summary);
+
+  const record = await readClaudeSessionRecord(latest.id, process.cwd());
+
+  for (const message of record.transcript) {
+    console.log(message.role, message.content.map((block) => block.type).join(','));
+  }
+}
+```
+
+`record.rawSession` and `record.rawMessages` preserve the provider-native data, while `record.transcript` gives you normalized cross-provider messages.
+
 #### `TurnHandle`
 
 Main methods and properties:

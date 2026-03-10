@@ -307,3 +307,53 @@ export type CliMessage =
     | ControlCancelRequestMessage
     | KeepAliveMessage
     | ResultMessage;
+
+export type SessionTranscriptRole = 'user' | 'assistant';
+
+export type SessionTranscriptContentBlock =
+    | { type: 'text'; text: string }
+    | { type: 'thinking'; thinking: string }
+    | { type: 'tool_use'; name: string; input?: unknown; toolUseId?: string }
+    | { type: 'tool_result'; content: unknown; isError?: boolean; toolUseId?: string }
+    | { type: 'plan'; text: string; explanation?: string }
+    | {
+        type: 'approval_needed';
+        title: string;
+        description: string;
+        toolName?: string;
+        status?: string;
+        requiresAttach?: boolean;
+        payload?: unknown;
+    };
+
+export interface SessionTranscriptMessage {
+    id: string;
+    role: SessionTranscriptRole;
+    createdAt: string;
+    turnId?: string;
+    itemId?: string;
+    content: SessionTranscriptContentBlock[];
+}
+
+export interface SessionBrowserSummary<TRaw = unknown> {
+    provider: 'claude' | 'gemini' | 'codex' | 'copilot';
+    sessionId: string;
+    title: string;
+    createdAt?: string;
+    updatedAt?: string;
+    messageCount: number;
+    projectPath?: string;
+    gitBranch?: string;
+    raw: TRaw;
+}
+
+export interface SessionBrowserRecord<TRawSession = unknown, TRawMessage = unknown>
+    extends SessionBrowserSummary<TRawSession> {
+    rawMessages: TRawMessage[];
+    messages: SessionTranscriptMessage[];
+}
+
+export interface ClaudeSessionLocatorOptions {
+    homeDir?: string;
+    claudeDir?: string;
+}

@@ -9,6 +9,13 @@ import { readFile, readdir, stat } from 'fs/promises';
 import { join, basename, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { EventEmitter } from 'events';
+import type {
+    ClaudeSessionLocatorOptions,
+    SessionBrowserRecord,
+    SessionBrowserSummary,
+    SessionTranscriptContentBlock,
+    SessionTranscriptMessage
+} from './types.js';
 
 // ============================================================================
 // Types
@@ -91,8 +98,14 @@ export interface SessionDetails {
 // Session Discovery Service
 // ============================================================================
 
-const CLAUDE_DIR = join(homedir(), '.claude');
-const PROJECTS_DIR = join(CLAUDE_DIR, 'projects');
+function getClaudeDir(options: ClaudeSessionLocatorOptions = {}): string {
+    if (options.claudeDir) return options.claudeDir;
+    return join(options.homeDir || homedir(), '.claude');
+}
+
+function getProjectsDir(options: ClaudeSessionLocatorOptions = {}): string {
+    return join(getClaudeDir(options), 'projects');
+}
 
 /**
  * Convert project path to escaped directory name
@@ -131,28 +144,29 @@ function deriveProjectPath(storagePath: string, escapedPath: string): string {
 /**
  * Get the storage path for a project
  */
-export function getProjectStoragePath(projectPath: string): string {
-    return join(PROJECTS_DIR, escapeProjectPath(projectPath));
+export function getProjectStoragePath(projectPath: string, options: ClaudeSessionLocatorOptions = {}): string {
+    return join(getProjectsDir(options), escapeProjectPath(projectPath));
 }
 
 /**
  * List all projects known to Claude Code
  */
-export function listProjects(): ProjectInfo[] {
-    if (!existsSync(PROJECTS_DIR)) {
+export function listProjects(options: ClaudeSessionLocatorOptions = {}): ProjectInfo[] {
+    const projectsDir = getProjectsDir(options);
+    if (!existsSync(projectsDir)) {
         return [];
     }
 
     const projects: ProjectInfo[] = [];
     
     try {
-        const dirs = readdirSync(PROJECTS_DIR, { withFileTypes: true });
+        const dirs = readdirSync(projectsDir, { withFileTypes: true });
         
         for (const dir of dirs) {
             if (!dir.isDirectory()) continue;
             if (dir.name === '.' || dir.name === '..') continue;
             
-            const storagePath = join(PROJECTS_DIR, dir.name);
+            const storagePath = join(projectsDir, dir.name);
             const projectPath = deriveProjectPath(storagePath, dir.name);
             
             // Get session count
@@ -190,21 +204,22 @@ export function listProjects(): ProjectInfo[] {
 /**
  * Async version of listProjects to avoid blocking the event loop
  */
-export async function listProjectsAsync(): Promise<ProjectInfo[]> {
-    if (!existsSync(PROJECTS_DIR)) {
+export async function listProjectsAsync(options: ClaudeSessionLocatorOptions = {}): Promise<ProjectInfo[]> {
+    const projectsDir = getProjectsDir(options);
+    if (!existsSync(projectsDir)) {
         return [];
     }
 
     const projects: ProjectInfo[] = [];
 
     try {
-        const dirs = await readdir(PROJECTS_DIR, { withFileTypes: true });
+        const dirs = await readdir(projectsDir, { withFileTypes: true });
 
         for (const dir of dirs) {
             if (!dir.isDirectory()) continue;
             if (dir.name === '.' || dir.name === '..') continue;
 
-            const storagePath = join(PROJECTS_DIR, dir.name);
+            const storagePath = join(projectsDir, dir.name);
             const projectPath = deriveProjectPath(storagePath, dir.name);
 
             let sessionCount = 0;
@@ -239,8 +254,8 @@ export async function listProjectsAsync(): Promise<ProjectInfo[]> {
 /**
  * List sessions for a specific project
  */
-export async function listSessions(projectPath: string): Promise<SessionEntry[]> {
-    const storagePath = getProjectStoragePath(projectPath);
+export async function listSessions(projectPath: string, options: ClaudeSessionLocatorOptions = {}): Promise<SessionEntry[]> {
+    const storagePath = getProjectStoragePath(projectPath, options);
     const indexPath = join(storagePath, 'sessions-index.json');
 
     if (!existsSync(indexPath)) {
@@ -262,8 +277,8 @@ export async function listSessions(projectPath: string): Promise<SessionEntry[]>
 /**
  * Get detailed information about a session
  */
-export function getSessionDetails(sessionId: string, projectPath: string): SessionDetails | null {
-    const storagePath = getProjectStoragePath(projectPath);
+export function getSessionDetails(sessionId: string, projectPath: string, options: ClaudeSessionLocatorOptions = {}): SessionDetails | null {
+    const storagePath = getProjectStoragePath(projectPath, options);
     const sessionPath = join(storagePath, `${sessionId}.jsonl`);
     
     if (!existsSync(sessionPath)) {
@@ -319,8 +334,8 @@ export function getSessionDetails(sessionId: string, projectPath: string): Sessi
 /**
  * Async version of getSessionDetails to avoid blocking the event loop
  */
-export async function getSessionDetailsAsync(sessionId: string, projectPath: string): Promise<SessionDetails | null> {
-    const storagePath = getProjectStoragePath(projectPath);
+export async function getSessionDetailsAsync(sessionId: string, projectPath: string, options: ClaudeSessionLocatorOptions = {}): Promise<SessionDetails | null> {
+    const storagePath = getProjectStoragePath(projectPath, options);
     const sessionPath = join(storagePath, `${sessionId}.jsonl`);
 
     if (!existsSync(sessionPath)) {
@@ -376,14 +391,278 @@ export async function getSessionDetailsAsync(sessionId: string, projectPath: str
 /**
  * Get messages from a session since a given timestamp
  */
-export function getMessagesSince(sessionId: string, projectPath: string, since: Date): SessionMessage[] {
-    const details = getSessionDetails(sessionId, projectPath);
+export function getMessagesSince(sessionId: string, projectPath: string, since: Date, options: ClaudeSessionLocatorOptions = {}): SessionMessage[] {
+    const details = getSessionDetails(sessionId, projectPath, options);
     if (!details) return [];
     
     return details.messages.filter(msg => {
         if (!msg.timestamp) return false;
         return new Date(msg.timestamp) > since;
     });
+}
+
+function toIsoTimestamp(value: unknown): string {
+    if (typeof value === 'string') {
+        const parsed = Date.parse(value);
+        if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
+    }
+    if (typeof value === 'number') {
+        const ms = value > 1_000_000_000_000 ? value : value * 1000;
+        return new Date(ms).toISOString();
+    }
+    return new Date().toISOString();
+}
+
+function safeJson(value: unknown, maxChars = 1200): string {
+    try {
+        const raw = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        return raw.length > maxChars ? `${raw.slice(0, maxChars)}...` : raw;
+    } catch {
+        return String(value);
+    }
+}
+
+function buildTranscriptMessage(
+    role: 'user' | 'assistant',
+    createdAt: string,
+    turnId: string,
+    itemId: string,
+    blockIndex: number,
+    block: SessionTranscriptContentBlock
+): SessionTranscriptMessage {
+    return {
+        id: `${turnId}:${itemId}:${blockIndex}`,
+        role,
+        createdAt,
+        turnId,
+        itemId,
+        content: [block]
+    };
+}
+
+function extractClaudeTextBlock(block: any): string | null {
+    if (!block) return null;
+    if (typeof block?.text === 'string' && block.text.trim()) return block.text.trim();
+    if (typeof block?.content === 'string' && block.content.trim()) return block.content.trim();
+    return null;
+}
+
+function formatClaudeTodos(todos: any[]): string | null {
+    if (!Array.isArray(todos) || todos.length === 0) return null;
+    const lines = todos.slice(0, 20).map((todo: any) => {
+        const status = typeof todo?.status === 'string' ? todo.status : 'pending';
+        const content = typeof todo?.content === 'string'
+            ? todo.content
+            : (typeof todo?.title === 'string' ? todo.title : 'Untitled');
+        return `- [${status}] ${content}`;
+    });
+    if (todos.length > 20) {
+        lines.push(`- ...and ${todos.length - 20} more`);
+    }
+    return lines.join('\n').trim() || null;
+}
+
+function extractFirstPrompt(messages: SessionMessage[]): string {
+    for (const message of messages) {
+        const content = Array.isArray(message?.message?.content) ? message.message.content : [];
+        for (const block of content) {
+            const text = extractClaudeTextBlock(block);
+            if (text) return text;
+        }
+        if (typeof message?.summary === 'string' && message.summary.trim()) {
+            return message.summary.trim();
+        }
+    }
+    return 'Claude session';
+}
+
+export function normalizeClaudeSessionMessages(rawMessages: SessionMessage[]): SessionTranscriptMessage[] {
+    const messages: SessionTranscriptMessage[] = [];
+    const resolvedToolUseIds = new Set<string>();
+    const pendingToolUses = new Map<string, {
+        turnId: string;
+        itemId: string;
+        createdAt: string;
+        toolName?: string;
+        input?: unknown;
+        messageIndex: number;
+    }>();
+
+    for (const raw of rawMessages) {
+        const content = Array.isArray(raw?.message?.content) ? raw.message.content : [];
+        for (const block of content) {
+            if (block?.type === 'tool_result' && typeof block?.tool_use_id === 'string' && block.tool_use_id.trim()) {
+                resolvedToolUseIds.add(block.tool_use_id);
+            }
+        }
+    }
+
+    rawMessages.forEach((raw, index) => {
+        const rawType = String(raw?.type || '');
+        if (
+            rawType === 'queue-operation' ||
+            rawType === 'file-history-snapshot' ||
+            (raw as any)?.isSnapshotUpdate ||
+            (raw as any)?.snapshot
+        ) {
+            return;
+        }
+
+        const role: 'user' | 'assistant' = raw?.message?.role === 'user' || rawType === 'user' ? 'user' : 'assistant';
+        const createdAt = toIsoTimestamp(raw?.timestamp ?? Date.now());
+        const turnId = `claude-${raw?.sessionId || 'session'}`;
+        const itemId = typeof raw?.uuid === 'string' && raw.uuid.trim() ? raw.uuid : `line-${index}`;
+        const blocks: SessionTranscriptContentBlock[] = [];
+
+        if (rawType === 'summary' && typeof raw?.summary === 'string' && raw.summary.trim()) {
+            blocks.push({ type: 'text', text: raw.summary.trim() });
+        }
+
+        const content = Array.isArray(raw?.message?.content) ? raw.message.content : [];
+        for (const block of content) {
+            const blockType = typeof block?.type === 'string' ? block.type : 'unknown';
+            if (blockType === 'text' || blockType === 'input_text' || blockType === 'output_text' || blockType === 'inputText') {
+                const text = extractClaudeTextBlock(block);
+                if (text) blocks.push({ type: 'text', text });
+                continue;
+            }
+            if (blockType === 'thinking' && typeof block?.thinking === 'string' && block.thinking.trim()) {
+                blocks.push({ type: 'thinking', thinking: block.thinking.trim() });
+                continue;
+            }
+            if (blockType === 'tool_use') {
+                const toolUseId = typeof block?.id === 'string' && block.id.trim() ? block.id : undefined;
+                const toolName = typeof block?.name === 'string' && block.name.trim() ? block.name : 'ToolUse';
+                blocks.push({
+                    type: 'tool_use',
+                    name: toolName,
+                    input: block?.input,
+                    toolUseId
+                });
+                if (toolUseId && !resolvedToolUseIds.has(toolUseId)) {
+                    pendingToolUses.set(toolUseId, {
+                        turnId,
+                        itemId,
+                        createdAt,
+                        toolName,
+                        input: block?.input,
+                        messageIndex: index
+                    });
+                }
+                continue;
+            }
+            if (blockType === 'tool_result') {
+                const toolUseId = typeof block?.tool_use_id === 'string' && block.tool_use_id.trim()
+                    ? block.tool_use_id
+                    : undefined;
+                blocks.push({
+                    type: 'tool_result',
+                    content: block?.content,
+                    isError: Boolean(block?.is_error),
+                    toolUseId
+                });
+                if (toolUseId) resolvedToolUseIds.add(toolUseId);
+                continue;
+            }
+            const fallback = safeJson(block, 900).trim();
+            if (fallback) {
+                blocks.push({ type: 'text', text: `[${blockType}] ${fallback}` });
+            }
+        }
+
+        const todosText = formatClaudeTodos((raw as any)?.todos);
+        if (todosText) {
+            blocks.push({
+                type: 'plan',
+                text: 'Todo List',
+                explanation: todosText
+            });
+        }
+
+        if (blocks.length === 0 && (raw as any)?.toolUseResult != null) {
+            const toolResultText = typeof (raw as any).toolUseResult === 'string'
+                ? (raw as any).toolUseResult
+                : safeJson((raw as any).toolUseResult, 1200);
+            if (toolResultText.trim()) {
+                blocks.push({
+                    type: 'tool_result',
+                    content: toolResultText,
+                    isError: toolResultText.toLowerCase().includes('error')
+                });
+            }
+        }
+
+        blocks.forEach((block, blockIndex) => {
+            messages.push(buildTranscriptMessage(role, createdAt, turnId, itemId, blockIndex, block));
+        });
+    });
+
+    const nearTailIndex = Math.max(0, rawMessages.length - 3);
+    for (const [toolUseId, pending] of pendingToolUses) {
+        if (resolvedToolUseIds.has(toolUseId)) continue;
+        if (pending.messageIndex < nearTailIndex) continue;
+        messages.push(buildTranscriptMessage(
+            'assistant',
+            pending.createdAt,
+            pending.turnId,
+            `${pending.itemId}-approval`,
+            0,
+            {
+                type: 'approval_needed',
+                title: 'Tool approval may be required',
+                description: 'This tool use appears unresolved in the saved Claude session.',
+                toolName: pending.toolName,
+                status: 'pending',
+                requiresAttach: true,
+                payload: {
+                    toolUseId,
+                    input: pending.input
+                }
+            }
+        ));
+    }
+
+    return messages;
+}
+
+export async function listClaudeSessionSummaries(
+    projectPath: string,
+    options: ClaudeSessionLocatorOptions = {}
+): Promise<SessionBrowserSummary<SessionEntry>[]> {
+    const entries = await listSessions(projectPath, options);
+    return entries.map((entry) => ({
+        provider: 'claude',
+        sessionId: entry.sessionId,
+        title: entry.firstPrompt || 'Claude session',
+        createdAt: toIsoTimestamp(entry.created),
+        updatedAt: toIsoTimestamp(entry.modified),
+        messageCount: entry.messageCount,
+        projectPath: entry.projectPath,
+        gitBranch: entry.gitBranch,
+        raw: entry
+    }));
+}
+
+export async function readClaudeSessionRecord(
+    sessionId: string,
+    projectPath: string,
+    options: ClaudeSessionLocatorOptions = {}
+): Promise<SessionBrowserRecord<SessionDetails, SessionMessage> | null> {
+    const details = await getSessionDetailsAsync(sessionId, projectPath, options);
+    if (!details) return null;
+    return {
+        provider: 'claude',
+        sessionId: details.sessionId,
+        title: details.summary || extractFirstPrompt(details.messages),
+        createdAt: details.created?.toISOString(),
+        updatedAt: details.modified?.toISOString(),
+        messageCount: details.messageCount,
+        projectPath: details.projectPath,
+        gitBranch: details.gitBranch,
+        raw: details,
+        rawMessages: details.messages,
+        messages: normalizeClaudeSessionMessages(details.messages)
+    };
 }
 
 // ============================================================================
@@ -589,6 +868,6 @@ export class SessionWatcher extends EventEmitter {
 // ============================================================================
 
 export {
-    CLAUDE_DIR,
-    PROJECTS_DIR
+    getClaudeDir,
+    getProjectsDir
 };

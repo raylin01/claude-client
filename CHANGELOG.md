@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2
+
+- Added shared provider-neutral session browser types for raw plus normalized transcript access.
+- Added `listClaudeSessionSummaries(...)` and `readClaudeSessionRecord(...)` on top of the existing Claude filesystem session store.
+- Added normalized Claude transcript extraction for text, thinking, tool use, tool results, plans, and pending approvals.
+- Added session browser tests and optional locator overrides for Claude session discovery helpers.
+
 ## 0.3.1
 
 - Added `createQuestionSession(...)` to the structured client for incremental multi-question workflows.

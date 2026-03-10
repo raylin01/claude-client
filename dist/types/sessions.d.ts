@@ -4,6 +4,7 @@
  * Utilities for reading Claude Code session data from ~/.claude/projects/
  */
 import { EventEmitter } from 'events';
+import type { ClaudeSessionLocatorOptions, SessionBrowserRecord, SessionBrowserSummary, SessionTranscriptMessage } from './types.js';
 /**
  * Project information from ~/.claude/projects/
  */
@@ -65,8 +66,8 @@ export interface SessionDetails {
     gitBranch?: string;
     messageCount: number;
 }
-declare const CLAUDE_DIR: string;
-declare const PROJECTS_DIR: string;
+declare function getClaudeDir(options?: ClaudeSessionLocatorOptions): string;
+declare function getProjectsDir(options?: ClaudeSessionLocatorOptions): string;
 /**
  * Convert project path to escaped directory name
  */
@@ -78,31 +79,34 @@ export declare function unescapeProjectPath(escapedPath: string): string;
 /**
  * Get the storage path for a project
  */
-export declare function getProjectStoragePath(projectPath: string): string;
+export declare function getProjectStoragePath(projectPath: string, options?: ClaudeSessionLocatorOptions): string;
 /**
  * List all projects known to Claude Code
  */
-export declare function listProjects(): ProjectInfo[];
+export declare function listProjects(options?: ClaudeSessionLocatorOptions): ProjectInfo[];
 /**
  * Async version of listProjects to avoid blocking the event loop
  */
-export declare function listProjectsAsync(): Promise<ProjectInfo[]>;
+export declare function listProjectsAsync(options?: ClaudeSessionLocatorOptions): Promise<ProjectInfo[]>;
 /**
  * List sessions for a specific project
  */
-export declare function listSessions(projectPath: string): Promise<SessionEntry[]>;
+export declare function listSessions(projectPath: string, options?: ClaudeSessionLocatorOptions): Promise<SessionEntry[]>;
 /**
  * Get detailed information about a session
  */
-export declare function getSessionDetails(sessionId: string, projectPath: string): SessionDetails | null;
+export declare function getSessionDetails(sessionId: string, projectPath: string, options?: ClaudeSessionLocatorOptions): SessionDetails | null;
 /**
  * Async version of getSessionDetails to avoid blocking the event loop
  */
-export declare function getSessionDetailsAsync(sessionId: string, projectPath: string): Promise<SessionDetails | null>;
+export declare function getSessionDetailsAsync(sessionId: string, projectPath: string, options?: ClaudeSessionLocatorOptions): Promise<SessionDetails | null>;
 /**
  * Get messages from a session since a given timestamp
  */
-export declare function getMessagesSince(sessionId: string, projectPath: string, since: Date): SessionMessage[];
+export declare function getMessagesSince(sessionId: string, projectPath: string, since: Date, options?: ClaudeSessionLocatorOptions): SessionMessage[];
+export declare function normalizeClaudeSessionMessages(rawMessages: SessionMessage[]): SessionTranscriptMessage[];
+export declare function listClaudeSessionSummaries(projectPath: string, options?: ClaudeSessionLocatorOptions): Promise<SessionBrowserSummary<SessionEntry>[]>;
+export declare function readClaudeSessionRecord(sessionId: string, projectPath: string, options?: ClaudeSessionLocatorOptions): Promise<SessionBrowserRecord<SessionDetails, SessionMessage> | null>;
 export interface WatcherEvents {
     'session_updated': (entry: SessionEntry) => void;
     'session_new': (entry: SessionEntry) => void;
@@ -164,4 +168,4 @@ export declare class SessionWatcher extends EventEmitter {
      */
     close(): void;
 }
-export { CLAUDE_DIR, PROJECTS_DIR };
+export { getClaudeDir, getProjectsDir };
