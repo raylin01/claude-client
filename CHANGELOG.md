@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Added `createQuestionSession(...)` to the structured client for incremental multi-question workflows.
+- Allowed structured Claude question answers to be keyed by question id as well as header/prompt labels.
+- Updated tests and README examples for the new question helper.
+
 ## 0.3.0
 
 - Added a new structured client layer via `ClaudeClient.init(...)`

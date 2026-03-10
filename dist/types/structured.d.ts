@@ -129,6 +129,28 @@ export interface TurnUpdate {
 }
 export type QuestionAnswerValue = string | string[];
 export type QuestionAnswerInput = QuestionAnswerValue | QuestionAnswerValue[] | Record<string, QuestionAnswerValue>;
+export interface ClaudeQuestionSessionSnapshot {
+    requestId: string;
+    request: QuestionRequest;
+    currentIndex: number;
+    answers: Record<string, QuestionAnswerValue>;
+}
+export declare class ClaudeQuestionSession {
+    private readonly client;
+    private readonly request;
+    private readonly answers;
+    private currentIndex;
+    constructor(client: StructuredClaudeClient, request: QuestionRequest);
+    get requestId(): string;
+    current(): ClaudeQuestionSessionSnapshot;
+    getCurrentQuestion(): QuestionPrompt | null;
+    getAnswers(): Record<string, QuestionAnswerValue>;
+    setAnswer(questionKey: string | number, answer: QuestionAnswerValue): this;
+    setCurrentAnswer(answer: QuestionAnswerValue): this;
+    next(): QuestionPrompt | null;
+    previous(): QuestionPrompt | null;
+    submit(): Promise<void>;
+}
 declare class TurnHandle extends EventEmitter {
     private readonly session;
     private snapshot;
@@ -176,6 +198,7 @@ export declare class StructuredClaudeClient extends EventEmitter {
     getHistory(): TurnSnapshot[];
     getOpenRequests(): OpenRequest[];
     getOpenRequest(id: string): OpenRequest | null;
+    createQuestionSession(id: string): ClaudeQuestionSession;
     approveRequest(id: string, decision?: {
         message?: string;
         updatedInput?: Record<string, any>;

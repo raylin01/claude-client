@@ -177,6 +177,62 @@ test('StructuredClaudeClient answers AskUserQuestion requests', async () => {
   assert.equal(client.getOpenRequests().length, 0);
 });
 
+test('StructuredClaudeClient supports incremental question sessions', async () => {
+  const { rawClient, client, controlResponses } = createStructuredClient();
+
+  client.send('Ask me something else');
+
+  rawClient.emit('control_request', {
+    type: 'control_request',
+    request_id: 'sdk-question-2',
+    request: {
+      subtype: 'can_use_tool',
+      tool_name: 'AskUserQuestion',
+      input: {
+        questions: [
+          {
+            id: 'color-id',
+            header: 'Color',
+            question: 'Pick a color',
+            options: ['Red', 'Blue']
+          },
+          {
+            id: 'pets-id',
+            header: 'Pets',
+            question: 'Pick pets',
+            options: ['Cat', 'Dog'],
+            multiSelect: true
+          }
+        ]
+      }
+    }
+  });
+
+  const [request] = client.getOpenRequests();
+  const session = client.createQuestionSession(request.id);
+
+  assert.equal(session.getCurrentQuestion()?.id, 'color-id');
+  session.setCurrentAnswer('Blue');
+  session.next();
+  session.setAnswer('pets-id', ['Cat', 'Dog']);
+
+  assert.deepEqual(session.current().answers, {
+    'color-id': 'Blue',
+    'pets-id': ['Cat', 'Dog']
+  });
+
+  await session.submit();
+
+  assert.equal(controlResponses.length, 1);
+  assert.deepEqual(controlResponses[0].responseData.updatedInput, {
+    question: 'Color, Pets',
+    answers: {
+      Color: 'Blue',
+      Pets: ['Cat', 'Dog']
+    }
+  });
+});
+
 test('ClaudeClient.init returns a structured client instance', async () => {
   const originalStart = ClaudeClient.prototype.start;
   ClaudeClient.prototype.start = async function start() {};

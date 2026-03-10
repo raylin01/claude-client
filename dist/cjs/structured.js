@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.StructuredClaudeClient = void 0;
+exports.StructuredClaudeClient = exports.ClaudeQuestionSession = void 0;
 const events_1 = require("events");
 const client_js_1 = require("./client.js");
 function nowIso() {
@@ -115,6 +115,87 @@ function buildQuestionPrompts(input) {
         };
     });
 }
+function getQuestionLookupKeys(question) {
+    const keys = [question.id, question.header, question.prompt].filter((value) => typeof value === 'string' && value.length > 0);
+    return Array.from(new Set(keys));
+}
+function resolveQuestionPrompt(questions, questionKey) {
+    if (typeof questionKey === 'number') {
+        const question = questions[questionKey];
+        if (!question) {
+            throw new Error(`Unknown question index: ${questionKey}`);
+        }
+        return { index: questionKey, question };
+    }
+    const index = questions.findIndex((question) => getQuestionLookupKeys(question).includes(questionKey));
+    if (index < 0) {
+        throw new Error(`Unknown question: ${questionKey}`);
+    }
+    return { index, question: questions[index] };
+}
+class ClaudeQuestionSession {
+    client;
+    request;
+    answers = new Map();
+    currentIndex;
+    constructor(client, request) {
+        this.client = client;
+        this.request = cloneOpenRequest(request);
+        this.currentIndex = Math.min(Math.max(request.currentQuestionIndex || 0, 0), Math.max(this.request.questions.length - 1, 0));
+    }
+    get requestId() {
+        return this.request.id;
+    }
+    current() {
+        return {
+            requestId: this.request.id,
+            request: cloneOpenRequest(this.request),
+            currentIndex: this.currentIndex,
+            answers: this.getAnswers()
+        };
+    }
+    getCurrentQuestion() {
+        return this.request.questions[this.currentIndex] ? cloneQuestionPrompt(this.request.questions[this.currentIndex]) : null;
+    }
+    getAnswers() {
+        const values = {};
+        for (const question of this.request.questions) {
+            const answer = this.answers.get(question.id);
+            if (answer !== undefined) {
+                values[question.id] = Array.isArray(answer) ? [...answer] : answer;
+            }
+        }
+        return values;
+    }
+    setAnswer(questionKey, answer) {
+        const { question } = resolveQuestionPrompt(this.request.questions, questionKey);
+        this.answers.set(question.id, Array.isArray(answer) ? [...answer] : answer);
+        return this;
+    }
+    setCurrentAnswer(answer) {
+        const question = this.getCurrentQuestion();
+        if (!question) {
+            throw new Error('No current question available.');
+        }
+        return this.setAnswer(question.id, answer);
+    }
+    next() {
+        if (this.currentIndex < this.request.questions.length - 1) {
+            this.currentIndex += 1;
+        }
+        return this.getCurrentQuestion();
+    }
+    previous() {
+        if (this.currentIndex > 0) {
+            this.currentIndex -= 1;
+        }
+        return this.getCurrentQuestion();
+    }
+    async submit() {
+        await this.client.answerQuestion(this.request.id, this.getAnswers());
+    }
+}
+exports.ClaudeQuestionSession = ClaudeQuestionSession;
 class TurnHandle extends events_1.EventEmitter {
     session;
     snapshot;
@@ -445,6 +526,13 @@ class StructuredClaudeClient extends events_1.EventEmitter {
     getOpenRequest(id) {
         const entry = this.openRequests.get(id);
         return entry ? cloneOpenRequest(entry.request) : null;
+    }
+    createQuestionSession(id) {
+        const entry = this.requireOpenRequest(id);
+        if (entry.request.kind !== 'question') {
+            throw new Error(`Request ${id} is not a question request.`);
+        }
+        return new ClaudeQuestionSession(this, entry.request);
     }
     async approveRequest(id, decision) {
         const entry = this.requireOpenRequest(id);
@@ -796,8 +884,8 @@ function normalizeQuestionAnswers(request, answers) {
     }
     const mappedAnswers = [];
     for (const question of request.questions) {
-        const key = question.header || question.prompt || question.id;
-        mappedAnswers.push(normalizeQuestionAnswerValue(answers[key]));
+        const matchingKey = getQuestionLookupKeys(question).find((key) => answers[key] !== undefined);
+        mappedAnswers.push(normalizeQuestionAnswerValue(matchingKey ? answers[matchingKey] : undefined));
     }
     return mappedAnswers;
 }

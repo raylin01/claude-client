@@ -74,6 +74,7 @@ Structured mode exports these main capabilities:
 - `turn.current()` returns the latest snapshot
 - `client.getOpenRequests()` returns unresolved tool or question requests
 - `client.approveRequest(...)`, `client.denyRequest(...)`, and `client.answerQuestion(...)` respond at the structured level
+- `client.createQuestionSession(requestId)` creates an incremental helper for multi-question prompts
 - `client.getHistory()` returns completed turn snapshots
 
 ### Stream Mode (Default)
@@ -185,10 +186,26 @@ Main methods:
 - `approveRequest(id, decision?)`: allow a tool or hook request
 - `denyRequest(id, reason?)`: deny a tool or hook request
 - `answerQuestion(id, answers)`: answer an `AskUserQuestion` request
+- `createQuestionSession(id)`: incrementally collect answers for a question request, then `submit()` them
 - `interruptTurn(turnId?)`: interrupt the active turn
 - `setPermissionMode(mode)`, `setModel(model)`, `setMaxThinkingTokens(tokens)`
 - `listSupportedModels(timeoutMs?)`
 - `close()`
+
+Question sessions let you step through multi-question prompts without assembling the final answer object up front:
+
+```ts
+const [request] = client.getOpenRequests();
+if (request?.kind === 'question') {
+  const session = client.createQuestionSession(request.id);
+
+  session.setCurrentAnswer('Blue');
+  session.next();
+  session.setCurrentAnswer(['Cat', 'Dog']);
+
+  await session.submit();
+}
+```
 
 #### `TurnHandle`
 
